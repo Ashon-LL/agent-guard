@@ -137,18 +137,25 @@ def discover_workspace(start_dir: str) -> str:
 
     AGENT_GUARD_WORKSPACE overrides discovery entirely - harness adapters
     that already know the workspace should set it.
+
+    The result is realpath-resolved (F8): on macOS, /var is a symlink to
+    /private/var, so an unresolved root string never matches the physical
+    cwd that child processes report - every target would look out of
+    bounds. Target paths stay LEXICAL by design; only the boundary root
+    gets physicalized.
     """
+    resolve = lambda pth: os.path.realpath(os.path.normpath(os.path.abspath(pth)))
     env = os.environ.get("AGENT_GUARD_WORKSPACE")
     if env:
-        return os.path.normpath(os.path.abspath(env))
+        return resolve(env)
     cur = os.path.normpath(os.path.abspath(start_dir))
     while True:
         marker = os.path.join(cur, ".git")
         if os.path.exists(marker):  # dir (normal repo) or file (worktree)
-            return cur
+            return resolve(cur)
         parent = os.path.dirname(cur)
         if parent == cur:
-            return os.path.normpath(os.path.abspath(start_dir))
+            return resolve(start_dir)
         cur = parent
 
 

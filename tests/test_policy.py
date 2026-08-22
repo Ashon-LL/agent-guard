@@ -123,6 +123,23 @@ class ClassifierFacts(unittest.TestCase):
         spec = one(classify_command("(rm -rf build)")[0])
         self.assertEqual(spec.kind, KIND_FS_DELETE)
 
+    def test_f8_discover_workspace_resolves_symlinks(self):
+        # macOS /var -> /private/var: an unresolved boundary root never
+        # matches the physical cwd children report.
+        import os
+        import tempfile
+        real = tempfile.mkdtemp(prefix="ag-f8-real-")
+        os.makedirs(os.path.join(real, ".git"))
+        link = os.path.join(tempfile.gettempdir(), f"ag-f8-link-{os.getpid()}")
+        if os.path.islink(link):
+            os.unlink(link)
+        os.symlink(real, link)
+        try:
+            found = classifier.discover_workspace(link)
+            self.assertEqual(found, os.path.realpath(real))
+        finally:
+            os.unlink(link)
+
     def test_f7_long_body_cut_must_not_damage_trailing_command(self):
         # friction F7: double-offset cut landed inside the trailing command
         # when the heredoc body was long, manufacturing unbalanced quotes.
