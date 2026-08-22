@@ -57,6 +57,7 @@ def main() -> int:
                             for e in plan["eligible"]],
         },
         "guard_snapshots": stash_count,
+        "decisions": decision_stats(engine.trash_root),
         "recent_audit": audit_tail(engine.trash_root, args.tail),
     }
     if args.as_json:
@@ -74,6 +75,9 @@ def main() -> int:
     print(f"retention : soft {ret['soft_days']}d / "
           f"{ret['soft_limit_bytes'] // (1024**3)}GiB; "
           f"{len(ret['gc_eligible'])} GC-eligible")
+    stats = info["decisions"]
+    if stats:
+        print(f"decisions : {top_codes(stats)}")
     print("recent decisions:")
     for record in info["recent_audit"]:
         print(f"  [{record.get('ts','')}] {record.get('action', record.get('event'))}"
@@ -84,6 +88,33 @@ def main() -> int:
 
 def audit_tail(trash_root, n):
     return audit.tail(os.path.join(trash_root, AUDIT_NAME), n)
+
+
+DECISION_EVENTS = {"check", "enforce-block", "enforce-proceed", "ask",
+                   "decision"}
+
+
+def decision_stats(trash_root):
+    """Local-only aggregation of recorded decisions (nothing leaves the
+    machine). Counts reason codes across all decision-bearing events; ask
+    OUTCOMES are not visible to the guard and are therefore not claimed
+    here."""
+    import collections
+    counter = collections.Counter()
+    for record in audit.tail(os.path.join(trash_root, AUDIT_NAME), 5000):
+        if record.get("event") not in DECISION_EVENTS:
+            continue
+        code = record.get("code")
+        if code:
+            counter[code] += 1
+        elif record.get("event") == "enforce-proceed":
+            counter["PROCEED(compensated)"] += 1
+    return dict(counter)
+
+
+def top_codes(stats, k=3):
+    return ", ".join(f"{c} x{n}" for c, n in
+                     sorted(stats.items(), key=lambda kv: -kv[1])[:k])
 
 if __name__ == "__main__":
     try:
