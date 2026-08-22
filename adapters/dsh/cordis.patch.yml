@@ -1,0 +1,25 @@
+# agent-guard - bundle patch layer.
+#
+# Appends one composition row to the launcher composition: registers the
+# agent_guard_safe_delete / agent_guard_restore / agent_guard_status model
+# tools, a PreToolUse-style interception on the bash entry (via the
+# tools/pre-execute waterfall), and prompt guidance. The decision rules
+# themselves live in ONE Python core (skills/delete-guard/scripts/check.py)
+# shipped inside this package - this adapter never re-implements them.
+#
+# config:
+#   repoRoot      empty = resolve Python core from this package (default).
+#                 Set an absolute path to point at a live agent-guard
+#                 checkout instead (development mode).
+#   defaultCwd    empty = executor default (the session workspace).
+#   promptSection register the deletion-discipline system-prompt section.
+#   sectionOrder  ascending; persona is 0, tool guidance conventionally
+#                 100-199.
+- insert:
+    - id: agent_guard
+      name: 'agent-guard'
+      config:
+        repoRoot: ''
+        defaultCwd: ''
+        promptSection: true
+        sectionOrder: 105

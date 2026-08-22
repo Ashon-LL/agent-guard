@@ -98,7 +98,7 @@ quarantine full          → BLOCK     (never fall back to permanent delete)
 
 | Harness | Status | Mechanism |
 |---|---|---|
-| **DSH** (DeepSeek Harness) | live, battle-tested | `tools/pre-execute` waterfall + model tools + prompt section |
+| **DSH** (DeepSeek Harness) | **published plugin** | `dsh plugin --profile <p> add github:mokuyoaxis/agent-guard` — waterfall interception + tools + prompt section |
 | **Claude Code** | ready (`adapters/claude/`) | PreToolUse hook → `permissionDecision` allow/ask/deny |
 | OpenCode / MCP | planned | once conformance has proven out twice |
 

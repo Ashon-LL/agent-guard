@@ -1,0 +1,34 @@
+{
+  "name": "agent-guard-dsh",
+  "version": "0.1.0",
+  "description": "Destructive-action reliability layer for AI agents on DeepSeek Harness: intercepts Bash before execution, quarantines deletions to .agent-trash/ with a restorable manifest, snapshots git before overwrites, and escalates compound shapes to the human (Decision Protocol: ALLOW / RELOCATE / SNAPSHOT / ASK / BLOCK). Rules live in one Python core shared across harnesses.",
+  "type": "module",
+  "main": "./adapters/dsh/lib/index.js",
+  "exports": {
+    ".": "./adapters/dsh/lib/index.js"
+  },
+  "files": [
+    "adapters/dsh",
+    "core",
+    "skills",
+    "docs",
+    "LICENSE",
+    "README.md",
+    "README.zh-CN.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./adapters/dsh/cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "deepseek-harness", "dsh", "dsh-plugin", "cordis", "agent-guard",
+    "ai-agents", "llm-tools", "git", "safety", "reliability",
+    "destructive-actions", "quarantine", "audit"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mokuyoaxis/agent-guard.git"
+  }
+}

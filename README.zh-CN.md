@@ -94,7 +94,7 @@ node_modules/(已 ignore) → ALLOW     (可证明可再生)
 
 | Harness | 状态 | 机制 |
 |---|---|---|
-| **DSH**(DeepSeek Harness) | 已上线,真实会话久经考验 | `tools/pre-execute` 瀑布 + 模型工具 + 提示层 |
+| **DSH**(DeepSeek Harness) | **已发布插件** | `dsh plugin --profile <p> add github:mokuyoaxis/agent-guard`——瀑布拦截 + 工具 + 提示层 |
 | **Claude Code** | 就绪(`adapters/claude/`) | PreToolUse hook → `permissionDecision` allow/ask/deny |
 | OpenCode / MCP | 规划中 | 待一致性保证在两个适配器上验证后再扩 |
 
