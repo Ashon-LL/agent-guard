@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.helpers import RepoFixture, git_available
 
+from core import classifier
 from core.classifier import (
     KIND_FS_DELETE, KIND_GIT_CLEAN, KIND_GIT_DISCARD, KIND_GIT_PUSH_FORCE,
     KIND_GIT_RESET_HARD, KIND_UNKNOWN, classify_command, classify_paths,
@@ -121,6 +122,22 @@ class ClassifierFacts(unittest.TestCase):
     def test_subshell_parens_do_not_hide_operations(self):
         spec = one(classify_command("(rm -rf build)")[0])
         self.assertEqual(spec.kind, KIND_FS_DELETE)
+
+    def test_f7_long_body_cut_must_not_damage_trailing_command(self):
+        # friction F7: double-offset cut landed inside the trailing command
+        # when the heredoc body was long, manufacturing unbalanced quotes.
+        body_lines = "\n".join(f"line {i} of a fairly long patch body" for i in range(12))
+        cmd = ("cd /workspace && python3 - <<'PYEOF'\n" + body_lines +
+               "\nPYEOF\n"
+               "git commit -qm \"ci: upload test logs as artifacts\" && "
+               "export VAR='ssh -4 -i /somewhere/keys -o IdentitiesOnly=yes'")
+        stripped = classifier.strip_heredocs(cmd)
+        import shlex as _shlex
+        _shlex.split(stripped, posix=True)  # must not raise
+        self.assertIn("ci: upload test logs as artifacts", stripped)
+        self.assertIn("IdentitiesOnly=yes", stripped)
+        specs, err = classify_command(cmd)
+        self.assertEqual((specs, err), ([], None))
 
     def test_heredoc_operator_cannot_rematch_and_trailing_lines_survive(self):
         # friction F6: operator retention caused an infinite re-match, and

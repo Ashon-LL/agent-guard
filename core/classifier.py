@@ -467,7 +467,10 @@ def strip_heredocs(cmd: str) -> str:
                                 re.MULTILINE)
         end_m = terminator.search(out, nl + 1)
         if end_m:
-            out = out[:start] + " " + out[nl + 1 + end_m.end():]
+            # end_m was searched from nl+1, so end_m.end() is ALREADY an
+            # absolute index in out. Adding nl+1 again double-offsets the
+            # cut deep into the following command (friction F7).
+            out = out[:start] + " " + out[end_m.end():]
         else:
             out = out[:start] + " " + out[nl + 1:]
 
