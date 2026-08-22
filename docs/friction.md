@@ -71,6 +71,22 @@ parsing; a regression test pins the behavior
 (`test_heredoc_body_is_payload_not_syntax`). Redirection-into-file is write
 territory, not delete territory.
 
+## F6 · Heredoc stripping re-matched its own operator and truncated
+
+While writing the bilingual README through shell heredocs, the guard denied
+the write a second time - even after F5 was fixed. Post-mortem: F5 kept the
+`<<'TAG'` operator token in the command string, so the stripping loop
+re-matched it on every iteration; and when no terminator line was found,
+the fallback truncated everything after the operator's line - physically
+cutting a trailing `sed -i 's/.../'` command mid-quotation and manufacturing
+the exact unbalanced-quote danger the classifier exists to refuse.
+
+**Fixed:** the operator is replaced (never re-matches), the truncating
+fallback is gone (later command lines always survive), and three regression
+tests pin the shapes: operator+trailing-quoted-line, double heredoc,
+unterminated heredoc. This is also the cleanest example of the
+fail-closed trade: the bug was annoying and visible, never dangerous.
+
 ## Verdict accuracy observed
 
 | Command | Verdict | Correct? |
