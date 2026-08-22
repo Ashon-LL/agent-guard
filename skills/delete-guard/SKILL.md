@@ -1,0 +1,90 @@
+---
+name: delete-guard
+description: >-
+  Recoverable deletion discipline for AI agents. Use whenever you need to
+  delete, clean, or discard files/directories or run destructive git
+  operations (clean, reset --hard, restore, force push) inside a workspace.
+  Guarantees quarantine-with-manifest instead of irreversible loss, and
+  explains what to do when the guard blocks you.
+---
+
+# delete-guard
+
+You operate inside a workspace where irreversible destruction is not a
+default capability. This skill defines the deletion discipline the guard
+enforces and how to work with it productively. The four pillars:
+
+- **Scope** - you act inside the workspace; the workspace root, `.git`, and
+  everything outside are never yours to delete.
+- **Recoverability** - deletions are compensated (relocated to `.agent-trash/`
+  with a manifest, or snapshotted as a git stash) before they take effect.
+- **Authorization** - a human decides permission boundaries. You can be
+  *downgraded* to RESTRICTED mode; you can never promote yourself back.
+- **Auditability** - every verdict, relocation, and restore is recorded in
+  JSONL. Nothing is invisible.
+
+## The one rule
+
+**Prefer `safe_delete` over `rm`. It is not slower for you - it is the
+supported path.**
+
+```bash
+# delete files/dirs/globs - they are quarantined, not destroyed:
+python3 <repo>/skills/delete-guard/scripts/safe_delete.py src/old_module.py
+python3 <repo>/skills/delete-guard/scripts/safe_delete.py 'build/**/*.tmp' --reason "stale build output"
+
+# undo a transaction (list first if unsure):
+python3 <repo>/skills/delete-guard/scripts/restore.py list
+python3 <repo>/skills/delete-guard/scripts/restore.py <txid>
+
+# current guard state:
+python3 <repo>/skills/delete-guard/scripts/status.py
+```
+
+Globs passed to `safe_delete` are expanded explicitly before anything moves.
+That is why `safe_delete '*.log'` works while `rm *.log` is blocked: the
+guard refuses opaque target sets, not cleanup work.
+
+## If you run `rm` / destructive git anyway
+
+A harness adapter may intercept the command before execution. Verdicts you
+can receive:
+
+| Verdict | Meaning | Your move |
+|---|---|---|
+| `PROCEED` | compensation already applied | continue; note the `txid` |
+| `BLOCK_UNDETERMINABLE` | targets unresolvable (`$VAR`, `bash -c`, `find -delete`, `xargs`) | restate with explicit paths, or use `safe_delete` |
+| `BLOCK_WILDCARD` | glob target set is opaque | use `safe_delete` with the glob |
+| `BLOCK_OUT_OF_WORKSPACE` / `BLOCK_PROTECTED_PATH` | outside boundary, workspace root, or `.git` | do not retry; this is a hard boundary. Ask the human if it is truly needed |
+| `BLOCK_RESTRICTED_MODE` | session is downgraded | only explicit single-file deletes are permitted; ask the human for anything more |
+| `BLOCK_FORCE_PUSH` | remote history destruction | do not retry; escalate to the human |
+
+A block is not an error to route around. Retrying the same operation in a
+disguised form (`/bin/rm`, `python -c`, a script) is a violation of the
+authorization pillar and is recorded in the audit log.
+
+## RESTRICTED mode
+
+After a human veto, the session runs with narrowed powers: explicit
+single-file deletes inside the workspace still work (quarantined as usual);
+recursive deletes, globs, and destructive git operations are refused. Only a
+human can restore NORMAL. If a task genuinely requires more, say so plainly
+and ask.
+
+## Regenerable artifacts
+
+Provably regenerable targets (git-ignored AND matching known artifact names
+like `node_modules/`, `dist/`, `__pycache__/`) are allowed to be deleted
+directly - no quarantine overhead. If git cannot prove a target is ignored,
+it is treated as valuable and quarantined. Uncertainty increases restriction.
+
+## Recovery
+
+Every relocation writes `origin -> trash` pairs into
+`.agent-trash/manifest.jsonl`. Restore is non-destructive: it refuses to
+overwrite anything that now exists at the origin unless a human passes
+`--force`. Git snapshots are stored as stashes named `agent-guard:<txid>`;
+restore applies them and never drops them.
+
+See `references/policy.md` for the complete rule table, verdict codes, and
+manifest format.
