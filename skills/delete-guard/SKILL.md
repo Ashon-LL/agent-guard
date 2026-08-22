@@ -59,6 +59,16 @@ can receive:
 | `BLOCK_RESTRICTED_MODE` | session is downgraded | only explicit single-file deletes are permitted; ask the human for anything more |
 | `BLOCK_FORCE_PUSH` | remote history destruction | do not retry; escalate to the human |
 
+Shape rules on compound commands: a single line that `cd`s anywhere before a
+destructive op (F1), or that creates files (`touch/mkdir/cp/mv/tee`,
+redirections) before destroying them (F2), is refused as undeterminable.
+Run deletions as standalone commands with an explicit workdir.
+
+Shape rules on compound commands: a single line that `cd`s anywhere before a
+destructive op (F1), or that creates files (`touch/mkdir/cp/mv/tee`,
+redirections) before destroying them (F2), is refused as undeterminable.
+Run deletions as standalone commands with an explicit workdir.
+
 A block is not an error to route around. Retrying the same operation in a
 disguised form (`/bin/rm`, `python -c`, a script) is a violation of the
 authorization pillar and is recorded in the audit log.

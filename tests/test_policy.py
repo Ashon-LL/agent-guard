@@ -87,6 +87,41 @@ class ClassifierFacts(unittest.TestCase):
     def test_benign_command_yields_nothing(self):
         self.assertEqual(classify_command("ls -la && echo hi")[0], [])
 
+    def test_f1_cd_before_destructive_blocks(self):
+        spec = one(classify_command("cd sub && rm -rf build")[0])
+        self.assertTrue(spec.undeterminable)
+        self.assertTrue(any("F1" in n for n in spec.notes))
+
+    def test_f1_destructive_before_cd_is_fine(self):
+        spec = one(classify_command("rm -rf build && cd sub")[0])
+        self.assertFalse(spec.undeterminable)
+
+    def test_f1_applies_to_git_clean(self):
+        spec = one(classify_command("cd sub && git clean -fd")[0])
+        self.assertTrue(spec.undeterminable)
+
+    def test_f2_create_then_delete_blocks(self):
+        spec = one(classify_command("touch a.tmp && rm a.tmp")[0])
+        self.assertTrue(any("F2" in n for n in spec.notes))
+        self.assertTrue(spec.undeterminable)
+
+    def test_f2_redirect_counts_as_creation(self):
+        spec = one(classify_command("echo x > f.txt && rm f.txt")[0])
+        self.assertTrue(any("F2" in n for n in spec.notes))
+
+    def test_f2_delete_then_create_is_fine(self):
+        spec = one(classify_command("rm -rf build && mkdir build")[0])
+        self.assertFalse(spec.undeterminable)
+
+    def test_f2_exempts_position_independent_kinds(self):
+        spec = one(classify_command("touch f && git reset --hard")[0])
+        self.assertEqual(spec.kind, KIND_GIT_RESET_HARD)
+        self.assertFalse(spec.undeterminable)
+
+    def test_subshell_parens_do_not_hide_operations(self):
+        spec = one(classify_command("(rm -rf build)")[0])
+        self.assertEqual(spec.kind, KIND_FS_DELETE)
+
     def test_heredoc_body_is_payload_not_syntax(self):
         # friction.md F5: quoted destructive text inside a heredoc is file
         # content, not an executed command.

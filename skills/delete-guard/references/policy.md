@@ -8,6 +8,8 @@ Platforms: Linux/macOS shells + git. Windows (cmd/PowerShell) is out of V1.
 |---|---|---|---|
 | 1 | dry run / no targets | `ALLOW_NOOP` | proceed unchanged |
 | 2 | unresolvable targets: shell vars, command substitution, unbalanced quotes, `bash -c` with destructive smell, `find -delete`, `find -exec rm`, stdin-fed (`xargs`) | `BLOCK_UNDETERMINABLE` | refuse |
+| 2a | SHAPE F1: destructive op preceded by `cd` in the same command line | `BLOCK_UNDETERMINABLE` | refuse; split into separate commands (compensation would run against the wrong workdir) |
+| 2b | SHAPE F2: file-creation op (`touch/mkdir/cp/mv/install/ln/tee`, `>`/`>>`) precedes a target-dependent destructive op in the same line | `BLOCK_UNDETERMINABLE` | refuse; split (targets created later are invisible to pre-execution compensation; `reset --hard`/force-push exempt - position-independent) |
 | 3 | any target inside quarantine (`.agent-trash/`) | `ALLOW_TRASH_GC` | direct delete permitted (housekeeping) |
 | 4 | target outside workspace | `BLOCK_OUT_OF_WORKSPACE` | refuse |
 | 5 | target is workspace root or `.git` (any depth) | `BLOCK_PROTECTED_PATH` | refuse |

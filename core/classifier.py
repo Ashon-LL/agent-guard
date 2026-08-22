@@ -57,6 +57,13 @@ KIND_GIT_DISCARD = "git-discard"        # git restore <path> / git checkout -- <
 KIND_GIT_PUSH_FORCE = "git-push-force"  # force / mirror / ref-deletion push
 KIND_UNKNOWN = "unknown"                # destructive smell, no parseable shape
 
+# Whole-command-line shape facts (docs/friction.md F1/F2).
+CREATION_CMDS = {"touch", "mkdir", "cp", "mv", "install", "ln", "tee"}
+REDIRECT_CREATE_TOKENS = {">", ">>"}
+# Kinds whose compensation depends on enumerating concrete targets; a target
+# created earlier in the same line is invisible to pre-execution compensation.
+TARGET_DEPENDENT_KINDS = {KIND_FS_DELETE, KIND_GIT_CLEAN, KIND_GIT_DISCARD}
+
 
 @dataclass
 class OpSpec:
@@ -70,6 +77,7 @@ class OpSpec:
     force: bool = False
     dry_run: bool = False
     extra_flags: List[str] = field(default_factory=list)  # scope letters for git clean
+    segment_index: int = 0          # position of this op within the command line
     wildcard: bool = False       # any target contains glob syntax
     undeterminable: bool = False # scope/targets cannot be resolved statically
     notes: List[str] = field(default_factory=list)
@@ -202,7 +210,22 @@ def _split_segments(tokens: List[str]) -> List[List[str]]:
             segments.append([])
         else:
             segments[-1].append(tok)
-    return [seg for seg in segments if seg]
+    out: List[List[str]] = []
+    for seg in segments:
+        # Subshell/grouping parens attach to adjacent words under shlex
+        # ((rm -rf x) tokenizes as ['(rm', '-rf', 'x)']); strip them from
+        # segment edges so the dispatcher sees the real command head.
+        while seg and seg[0][:1] in ("(", "{"):
+            seg[0] = seg[0][1:]
+            if not seg[0]:
+                seg.pop(0)
+        while seg and seg[-1][-1:] in (")", "}"):
+            seg[-1] = seg[-1][:-1]
+            if not seg[-1]:
+                seg.pop()
+        if seg:
+            out.append(seg)
+    return out
 
 
 def _basename(path: str) -> str:
@@ -433,6 +456,43 @@ def strip_heredocs(cmd: str) -> str:
         out = out[:start] + " " + out[nl + 1 + end_m.end():]
 
 
+def _has_create_redirect(segment: List[str]) -> bool:
+    return any(tok in REDIRECT_CREATE_TOKENS for tok in segment)
+
+
+def _apply_shape_rules(specs: List[OpSpec], cd_positions: List[int],
+                       creation_positions: List[int]) -> None:
+    """Whole-command-line restrictions (docs/friction.md F1/F2).
+
+    F1: a destructive op preceded by cd resolves against the wrong working
+        directory - compensation would enumerate/snapshot the wrong tree.
+        Applies to every destructive kind.
+    F2: a target created earlier in the same line does not exist yet at
+        interception time, so target-dependent compensation cannot cover it.
+        Position-independent compensations (reset --hard whole-tree stash,
+        force-push which is blocked anyway) are exempt.
+    Both surface through the existing fail-closed path: undeterminable ->
+    BLOCK_UNDETERMINABLE with the reason attached.
+    """
+    for spec in specs:
+        if spec.kind in (KIND_OTHER, KIND_UNKNOWN):
+            continue
+        idx = spec.segment_index
+        if any(pos < idx for pos in cd_positions):
+            spec.undeterminable = True
+            spec.note(
+                "F1: destructive operation follows 'cd' within the same "
+                "command line; targets cannot be resolved against the "
+                "declared working directory - split into separate commands")
+        if spec.kind in TARGET_DEPENDENT_KINDS and any(
+                pos < idx for pos in creation_positions):
+            spec.undeterminable = True
+            spec.note(
+                "F2: this command line creates files before destroying "
+                "them; pre-execution compensation cannot see targets that "
+                "do not exist yet - split into separate commands")
+
+
 def classify_command(cmd: str) -> Tuple[List[OpSpec], Optional[str]]:
     """Parse one shell command line into destructive OpSpecs.
 
@@ -453,7 +513,14 @@ def classify_command(cmd: str) -> Tuple[List[OpSpec], Optional[str]]:
         return [], None
 
     specs: List[OpSpec] = []
-    for segment in _split_segments(tokens):
+    cd_positions: List[int] = []
+    creation_positions: List[int] = []
+
+    def emit(spec: OpSpec, index: int) -> None:
+        spec.segment_index = index
+        specs.append(spec)
+
+    for index, segment in enumerate(_split_segments(tokens)):
         seg = segment
         from_xargs = False
         while seg and _basename(seg[0]) in SHELL_PREFIXES:
@@ -464,20 +531,27 @@ def classify_command(cmd: str) -> Tuple[List[OpSpec], Optional[str]]:
             continue
         head = _basename(seg[0])
 
+        if head == "cd":
+            cd_positions.append(index)
+        elif head in CREATION_CMDS or _has_create_redirect(seg):
+            creation_positions.append(index)
+
         if head in INTERPRETER_CMDS:
             inner = " ".join(seg[1:])
             if DESTRUCTIVE_SMELL_RE.search(inner):
                 spec = OpSpec(op=head, kind=KIND_UNKNOWN, undeterminable=True,
                               targets=[inner[:200]])
                 spec.note("indirect shell execution with destructive smell")
-                specs.append(spec)
+                emit(spec, index)
             continue
 
         if head in FS_DELETE_CMDS:
-            specs.append(_parse_fs_delete(head, seg, from_xargs))
+            emit(_parse_fs_delete(head, seg, from_xargs), index)
         elif head == "find":
-            specs.append(_parse_find(seg))
+            emit(_parse_find(seg), index)
         elif head == "git":
-            specs.append(_parse_git(seg))
+            emit(_parse_git(seg), index)
         # anything else: kind OTHER, intentionally ignored by policy
+
+    _apply_shape_rules(specs, cd_positions, creation_positions)
     return [s for s in specs if s.kind != KIND_OTHER], None
