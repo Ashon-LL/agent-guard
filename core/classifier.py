@@ -439,12 +439,17 @@ HEREDOC_OP_RE = re.compile(r"<<-?\s*([\"']?)([A-Za-z_][A-Za-z0-9_-]*)\1")
 
 
 def strip_heredocs(cmd: str) -> str:
-    """Remove heredoc bodies before classification (F5).
+    """Remove heredoc bodies before classification (F5/F6).
 
     A redirection like cat-over-heredoc writes a FILE; its body is payload
-    text, not executable syntax. Scanning it produced false positives on
-    documentation and scripts containing destructive-looking strings.
-    The operator token itself is kept so upstream structure is preserved.
+    text, not executable syntax. Two rules keep this safe and terminating:
+
+    * the operator token is REPLACED (not retained) so the scan can never
+      re-match the same heredoc;
+    * an unterminated heredoc removes only its own operator line - later
+      command lines survive intact (the old truncating fallback once cut a
+      sed line mid-quote and manufactured the very danger it guarded
+      against).
     """
     out = cmd
     while True:
@@ -452,16 +457,19 @@ def strip_heredocs(cmd: str) -> str:
         if not m:
             return out
         tag = m.group(2)
-        start = m.end()
-        nl = out.find("\n", start)
+        start = m.start()          # cut from the operator itself
+        after = m.end()
+        nl = out.find("\n", after)
         if nl == -1:
-            return out[:start]
+            out = out[:start] + " " + out[after:]
+            continue               # operator gone: no re-match possible
         terminator = re.compile(r"^\s*" + re.escape(tag) + r"\s*$",
                                 re.MULTILINE)
         end_m = terminator.search(out, nl + 1)
-        if not end_m:
-            return out[:nl + 1]
-        out = out[:start] + " " + out[nl + 1 + end_m.end():]
+        if end_m:
+            out = out[:start] + " " + out[nl + 1 + end_m.end():]
+        else:
+            out = out[:start] + " " + out[nl + 1:]
 
 
 def _has_create_redirect(segment: List[str]) -> bool:

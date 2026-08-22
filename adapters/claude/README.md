@@ -47,7 +47,7 @@ BLOCK uses the stderr channel so the *model* learns the remediation.
 3. Optionally copy `skills/delete-guard/SKILL.md` into the project's skill
    directory so the model prefers the safe-delete flow proactively.
 
-Requirements: Python 3.8+, `git`. No third-party packages.
+Requirements: Python 3.9+, POSIX shell, git. No third-party packages.
 
 ## Conformance
 

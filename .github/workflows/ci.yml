@@ -1,0 +1,50 @@
+# agent-guard CI - Linux/macOS x Python matrix.
+#
+# V1 targets Linux/macOS shells; Windows cmd/PowerShell dialects are tracked
+# separately (docs/architecture.md roadmap) and intentionally not built here.
+# Zero third-party dependencies: no install step, just run the suite.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Unit, CLI, recovery, policy and conformance suites
+        run: python -m unittest discover tests -v
+
+      - name: Integration smoke - hard boundary holds end-to-end
+        shell: bash
+        run: |
+          set -e
+          d="$(mktemp -d)"
+          git -C "$d" init -q
+          printf 'node_modules/\n' > "$d/.gitignore"
+          cd "$d"
+          # workspace root must be refused with exit code 2 even under --enforce
+          python3 "$GITHUB_WORKSPACE/skills/delete-guard/scripts/check.py" \
+            --enforce -- 'rm -rf .' && { echo 'guard failed to block'; exit 1; } \
+            || test $? -eq 2
+          echo 'hard boundary verified'

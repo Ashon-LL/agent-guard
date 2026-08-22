@@ -122,6 +122,29 @@ class ClassifierFacts(unittest.TestCase):
         spec = one(classify_command("(rm -rf build)")[0])
         self.assertEqual(spec.kind, KIND_FS_DELETE)
 
+    def test_heredoc_operator_cannot_rematch_and_trailing_lines_survive(self):
+        # friction F6: operator retention caused an infinite re-match, and
+        # the old truncating fallback cut a trailing sed line mid-quote.
+        cmd = ("cat > README.zh-CN.md <<'MDEOF'\n"
+               'body with "quotes" and (parens)\n'
+               "MDEOF\n"
+               "sed -i 's/old.name/new value/' README.md\n"
+               'grep -rn "3\\.8" . || echo none')
+        specs, err = classify_command(cmd)
+        self.assertEqual((specs, err), ([], None))
+
+    def test_two_heredocs_both_stripped(self):
+        cmd = ("cat > a.md <<'E1'\nrm -rf inside-a\nE1\n"
+               "cat > b.md <<'E2'\ngit clean -fd inside-b\nE2\n"
+               "echo done")
+        specs, err = classify_command(cmd)
+        self.assertEqual((specs, err), ([], None))
+
+    def test_unterminated_heredoc_keeps_later_lines(self):
+        cmd = "cat > f.md <<'EOF'\nunterminated body rm -rf x\n"
+        specs, err = classify_command(cmd)
+        self.assertEqual((specs, err), ([], None))
+
     def test_heredoc_body_is_payload_not_syntax(self):
         # friction.md F5: quoted destructive text inside a heredoc is file
         # content, not an executed command.
