@@ -40,6 +40,7 @@ def main() -> int:
     except (OSError, subprocess.TimeoutExpired):
         pass
 
+    plan = engine.gc_plan()
     info = {
         "workspace": workspace,
         "mode": state["mode"],
@@ -47,6 +48,14 @@ def main() -> int:
         "mode_set_by": state["set_by"],
         "trash_root": trash_root,
         "usage": usage,
+        "retention": {
+            "soft_days": plan["retention_days"],
+            "soft_limit_bytes": plan["size_limit_bytes"],
+            "total_bytes": plan["total_bytes"],
+            "gc_eligible": [{"txid": e["txid"], "bytes": e["bytes"],
+                             "reason": e["reason"]}
+                            for e in plan["eligible"]],
+        },
         "guard_snapshots": stash_count,
         "recent_audit": audit_tail(engine.trash_root, args.tail),
     }
@@ -61,6 +70,10 @@ def main() -> int:
     print(f"usage     : {usage['files']} files, {usage['bytes']} bytes, "
           f"{usage['transactions']} transactions")
     print(f"snapshots : {stash_count} agent-guard stashes")
+    ret = info["retention"]
+    print(f"retention : soft {ret['soft_days']}d / "
+          f"{ret['soft_limit_bytes'] // (1024**3)}GiB; "
+          f"{len(ret['gc_eligible'])} GC-eligible")
     print("recent decisions:")
     for record in info["recent_audit"]:
         print(f"  [{record.get('ts','')}] {record.get('action', record.get('event'))}"

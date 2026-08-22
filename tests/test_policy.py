@@ -12,9 +12,11 @@ from core.classifier import (
     KIND_GIT_RESET_HARD, KIND_UNKNOWN, classify_command, classify_paths,
 )
 from core.policy import (
-    ACTION_ALLOW, ACTION_BLOCK, CODE_BLOCK_OUT_OF_WORKSPACE,
-    CODE_BLOCK_PROTECTED_PATH, CODE_BLOCK_RESTRICTED_MODE,
-    CODE_BLOCK_UNDETERMINABLE, CODE_BLOCK_WILDCARD, MODE_NORMAL,
+    CODE_ASK_COMPOUND_CREATE_DELETE, CODE_ASK_COMPOUND_CWD_DELETE,
+    CODE_BLOCK_OUT_OF_WORKSPACE, CODE_BLOCK_PROTECTED_PATH,
+    CODE_BLOCK_RESTRICTED_MODE, CODE_BLOCK_UNDETERMINABLE_EFFECT,
+    CODE_BLOCK_WILDCARD, CODE_SNAPSHOT_GIT_STASH, DECISION_ASK,
+    DECISION_ALLOW, DECISION_BLOCK, DECISION_SNAPSHOT, MODE_NORMAL,
     MODE_RESTRICTED, PolicyContext, decide_ops,
 )
 
@@ -87,36 +89,34 @@ class ClassifierFacts(unittest.TestCase):
     def test_benign_command_yields_nothing(self):
         self.assertEqual(classify_command("ls -la && echo hi")[0], [])
 
-    def test_f1_cd_before_destructive_blocks(self):
+    def test_f1_cd_before_destructive_marks_shape(self):
         spec = one(classify_command("cd sub && rm -rf build")[0])
-        self.assertTrue(spec.undeterminable)
-        self.assertTrue(any("F1" in n for n in spec.notes))
+        self.assertEqual(spec.shape, "F1")
+        self.assertFalse(spec.undeterminable)  # effect IS determinable
 
     def test_f1_destructive_before_cd_is_fine(self):
         spec = one(classify_command("rm -rf build && cd sub")[0])
-        self.assertFalse(spec.undeterminable)
+        self.assertIsNone(spec.shape)
 
     def test_f1_applies_to_git_clean(self):
         spec = one(classify_command("cd sub && git clean -fd")[0])
-        self.assertTrue(spec.undeterminable)
+        self.assertEqual(spec.shape, "F1")
 
-    def test_f2_create_then_delete_blocks(self):
+    def test_f2_create_then_delete_marks_shape(self):
         spec = one(classify_command("touch a.tmp && rm a.tmp")[0])
-        self.assertTrue(any("F2" in n for n in spec.notes))
-        self.assertTrue(spec.undeterminable)
+        self.assertEqual(spec.shape, "F2")
 
     def test_f2_redirect_counts_as_creation(self):
         spec = one(classify_command("echo x > f.txt && rm f.txt")[0])
-        self.assertTrue(any("F2" in n for n in spec.notes))
+        self.assertEqual(spec.shape, "F2")
 
     def test_f2_delete_then_create_is_fine(self):
         spec = one(classify_command("rm -rf build && mkdir build")[0])
-        self.assertFalse(spec.undeterminable)
+        self.assertIsNone(spec.shape)
 
     def test_f2_exempts_position_independent_kinds(self):
         spec = one(classify_command("touch f && git reset --hard")[0])
-        self.assertEqual(spec.kind, KIND_GIT_RESET_HARD)
-        self.assertFalse(spec.undeterminable)
+        self.assertIsNone(spec.shape)
 
     def test_subshell_parens_do_not_hide_operations(self):
         spec = one(classify_command("(rm -rf build)")[0])
@@ -136,8 +136,8 @@ class ClassifierFacts(unittest.TestCase):
 class PolicyVerdicts(RepoFixture):
     def test_out_of_workspace_blocked(self):
         v = verdict_for("rm /etc/passwd", self.root)
-        self.assertEqual((v.action, v.code),
-                         (ACTION_BLOCK, CODE_BLOCK_OUT_OF_WORKSPACE))
+        self.assertEqual((v.decision, v.code),
+                         (DECISION_BLOCK, CODE_BLOCK_OUT_OF_WORKSPACE))
 
     def test_workspace_root_blocked(self):
         v = verdict_for("rm -rf .", self.root)
@@ -153,34 +153,63 @@ class PolicyVerdicts(RepoFixture):
 
     def test_variable_blocked(self):
         v = verdict_for("rm -rf $UNSET_DIR/", self.root)
-        self.assertEqual(v.code, CODE_BLOCK_UNDETERMINABLE)
+        self.assertEqual(v.code, CODE_BLOCK_UNDETERMINABLE_EFFECT)
 
     def test_rooted_recursion_relocates(self):
         self.write("build/cache/o.js")
         v = verdict_for("rm -rf build", self.root)
-        self.assertEqual(v.action, "RELOCATE")
+        self.assertEqual(v.decision, "RELOCATE")
 
     @unittest.skipUnless(git_available(), "git required")
     def test_regenerable_allowed(self):
         os.makedirs(os.path.join(self.root, "node_modules"), exist_ok=True)
         self.write("node_modules/pkg/index.js")
         v = verdict_for("rm -rf node_modules", self.root)
-        self.assertEqual(v.action, ACTION_ALLOW)
+        self.assertEqual(v.decision, DECISION_ALLOW)
 
     def test_restricted_narrow_file_ok(self):
         path = self.write("notes.txt")
         v = verdict_for(f"rm {path}", self.root, mode=MODE_RESTRICTED)
-        self.assertEqual(v.action, "RELOCATE")
+        self.assertEqual(v.decision, "RELOCATE")
 
     def test_restricted_recursion_blocked(self):
         self.write("dir/inner.txt")
         v = verdict_for("rm -rf dir", self.root, mode=MODE_RESTRICTED)
-        self.assertEqual((v.action, v.code),
-                         (ACTION_BLOCK, CODE_BLOCK_RESTRICTED_MODE))
+        self.assertEqual((v.decision, v.code),
+                         (DECISION_BLOCK, CODE_BLOCK_RESTRICTED_MODE))
 
     def test_restricted_git_blocked(self):
         v = verdict_for("git reset --hard", self.root, mode=MODE_RESTRICTED)
         self.assertEqual(v.code, CODE_BLOCK_RESTRICTED_MODE)
+
+    def test_f1_asks_once_with_compound_code(self):
+        v = verdict_for("cd sub && rm -rf build", self.root)
+        self.assertEqual((v.decision, v.code),
+                         (DECISION_ASK, CODE_ASK_COMPOUND_CWD_DELETE))
+
+    def test_f2_asks_once_with_compound_code(self):
+        self.write("a.tmp")
+        v = verdict_for("touch a.tmp && rm a.tmp", self.root)
+        self.assertEqual((v.decision, v.code),
+                         (DECISION_ASK, CODE_ASK_COMPOUND_CREATE_DELETE))
+
+    def test_reset_hard_snapshots_despite_creation_earlier(self):
+        v = verdict_for("touch f && git reset --hard", self.root)
+        self.assertEqual((v.decision, v.code),
+                         (DECISION_SNAPSHOT, CODE_SNAPSHOT_GIT_STASH))
+
+    def test_ask_degrades_to_block_in_restricted_mode(self):
+        # A vetoed capability cannot escalate to the human either.
+        v = verdict_for("cd sub && rm -rf build", self.root,
+                        mode=MODE_RESTRICTED)
+        self.assertEqual((v.decision, v.code),
+                         (DECISION_BLOCK, CODE_BLOCK_RESTRICTED_MODE))
+
+    def test_explanations_present_on_all_verdicts(self):
+        for cmd in ("rm -rf .", "rm *.log", "rm -rf $V/", "cd x && rm y",
+                    "git push --force origin main"):
+            v = verdict_for(cmd, self.root)
+            self.assertTrue(v.explanation, cmd)
 
 
 if __name__ == "__main__":

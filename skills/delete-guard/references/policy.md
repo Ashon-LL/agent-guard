@@ -2,14 +2,37 @@
 
 Platforms: Linux/macOS shells + git. Windows (cmd/PowerShell) is out of V1.
 
+## Decision Protocol
+
+The stable cross-harness interface is Decision + ReasonCode + Explanation
+(+ RecoveryPlan in payload). Five decision classes:
+
+| Decision | Meaning | Interaction tier |
+|---|---|---|
+| `ALLOW` | run unchanged (noop / provably regenerable / trash GC) | SAFE - silent |
+| `RELOCATE` | quarantine targets, then run | SAFE - silent, txid audited |
+| `SNAPSHOT` | git snapshot first, then run | SAFE - silent, txid audited |
+| `ASK` | single-execution authorization (ASK_ONCE, never a rule exemption) | AMBIGUOUS |
+| `BLOCK` | refuse: policy violation or true effect-uncertainty | FORBIDDEN |
+
+ASK is reserved for well-understood operations whose safe *automation* is
+unavailable (`COMPOUND_CWD_DELETE`, `COMPOUND_CREATE_DELETE`). True
+effect-uncertainty (`BLOCK_UNDETERMINABLE_EFFECT`: `$VAR`, `bash -c`,
+`find -delete`, `xargs`-fed lists) stays on the BLOCK path - allowing it
+would forfeit the core guarantee. Hard boundaries
+(`BLOCK_PROTECTED_PATH`, `BLOCK_OUT_OF_WORKSPACE`, `BLOCK_FORCE_PUSH`,
+RESTRICTED prohibitions) are policy violations and never askable.
+
+check.py exit codes: 0 proceed/advisory-ok · 2 blocked · 3 ask · 1 error.
+
 ## Rule table (first match wins)
 
 | # | Condition | Verdict code | Effect |
 |---|---|---|---|
 | 1 | dry run / no targets | `ALLOW_NOOP` | proceed unchanged |
-| 2 | unresolvable targets: shell vars, command substitution, unbalanced quotes, `bash -c` with destructive smell, `find -delete`, `find -exec rm`, stdin-fed (`xargs`) | `BLOCK_UNDETERMINABLE` | refuse |
-| 2a | SHAPE F1: destructive op preceded by `cd` in the same command line | `BLOCK_UNDETERMINABLE` | refuse; split into separate commands (compensation would run against the wrong workdir) |
-| 2b | SHAPE F2: file-creation op (`touch/mkdir/cp/mv/install/ln/tee`, `>`/`>>`) precedes a target-dependent destructive op in the same line | `BLOCK_UNDETERMINABLE` | refuse; split (targets created later are invisible to pre-execution compensation; `reset --hard`/force-push exempt - position-independent) |
+| 2 | unresolvable targets: shell vars, command substitution, unbalanced quotes, `bash -c` with destructive smell, `find -delete`, `find -exec rm`, stdin-fed (`xargs`) | `BLOCK_UNDETERMINABLE_EFFECT` | refuse - allowing it would forfeit the core guarantee |
+| 2a | SHAPE F1: destructive op preceded by `cd` in the same command line | `ASK` (`COMPOUND_CWD_DELETE`) | single-execution authorization; splitting the command avoids the prompt |
+| 2b | SHAPE F2: file-creation op (`touch/mkdir/cp/mv/install/ln/tee`, `>`/`>>`) precedes a target-dependent destructive op in the same line | `ASK` (`COMPOUND_CREATE_DELETE`) | single-execution authorization; `reset --hard`/force-push exempt (position-independent) |
 | 3 | any target inside quarantine (`.agent-trash/`) | `ALLOW_TRASH_GC` | direct delete permitted (housekeeping) |
 | 4 | target outside workspace | `BLOCK_OUT_OF_WORKSPACE` | refuse |
 | 5 | target is workspace root or `.git` (any depth) | `BLOCK_PROTECTED_PATH` | refuse |
@@ -73,6 +96,27 @@ Default artifact patterns: `node_modules dist build out target __pycache__
 Excluded from git via `.git/info/exclude` (the user's `.gitignore` is never
 modified). Retention/GC is intentionally manual in V1; `restore.py list` and
 `status.py` expose what exists.
+
+## Retention / GC (B4)
+
+Soft policy: 30-day retention, 5 GiB cap. Thresholds only MARK transactions
+`GC_ELIGIBLE` (oldest first under the cap); purging is an explicit
+`gc.py --execute` maintenance action. Lifecycle is fully audited:
+`QUARANTINED -> RESTORABLE -> GC_ELIGIBLE -> PURGED`; the audit log itself
+is never garbage-collected.
+
+Hard principle: **capacity limits never downgrade to permanent deletion.**
+If the quarantine cannot accept a relocation, the decision is
+`RELOCATE_FAILED_STORAGE` -> BLOCK; the untouched target stays at its origin.
+
+## Authorization scope
+
+NORMAL/RESTRICTED is a **session/agent capability**, not workspace state:
+one degraded agent must not DoS concurrent agents. State lives in
+`.agent-trash/sessions/<id>.json` (portable fallback); harness adapters
+SHOULD keep the authoritative mode in host memory. Promotion to NORMAL is
+host-side authority (`policy.force_mode`); agents never receive it as a
+model tool.
 
 ## Known limitations (V1)
 

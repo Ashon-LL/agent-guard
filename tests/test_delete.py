@@ -27,7 +27,7 @@ class SafeDeleteCLI(RepoFixture):
         proc = run("safe_delete.py", "--json", "report.txt", cwd=self.root)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         result = json.loads(proc.stdout)
-        self.assertEqual(result["verdict"]["action"], "RELOCATE")
+        self.assertEqual(result["verdict"]["decision"], "RELOCATE")
         self.assertFalse(os.path.exists(os.path.join(self.root, "report.txt")))
 
         listing = json.loads(run("restore.py", "list", "--json",
@@ -63,7 +63,7 @@ class CheckCLI(RepoFixture):
         proc = run("check.py", "--json", "--", "rm -rf /", cwd=self.root)
         self.assertEqual(proc.returncode, 0)          # advisory never fails
         out = json.loads(proc.stdout)
-        self.assertEqual(out["action"], "BLOCK")
+        self.assertEqual(out["decision"], "BLOCK")
 
     def test_enforce_proceeds_after_relocation(self):
         self.write("tmpbuild/o.js")
@@ -71,7 +71,7 @@ class CheckCLI(RepoFixture):
                    cwd=self.root)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         out = json.loads(proc.stdout)
-        self.assertEqual(out["action"], "PROCEED")
+        self.assertEqual(out["decision"], "ALLOW")
         self.assertFalse(os.path.exists(os.path.join(self.root, "tmpbuild")))
         self.assertGreaterEqual(out["compensations"][0]["moved"], 1)
 

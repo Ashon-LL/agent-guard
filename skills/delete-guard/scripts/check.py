@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 import _bootstrap  # noqa: F401
 
@@ -41,19 +42,24 @@ def main() -> int:
     engine = recovery.RecoveryEngine(workspace, trash_root)
     audit_path = os.path.join(trash_root, AUDIT_NAME)
 
+    started = time.monotonic()
     specs, parse_error = classifier.classify_command(cmd)
     verdicts = policy.decide_ops(specs, ctx) if not parse_error else [
-        policy.Verdict(policy.ACTION_BLOCK, policy.CODE_BLOCK_UNDETERMINABLE,
+        policy.Verdict(policy.DECISION_BLOCK,
+                       policy.CODE_BLOCK_UNDETERMINABLE_EFFECT,
                        [f"parse error: {parse_error}"])]
     top = policy.worst(verdicts)
+    latency_ms = round((time.monotonic() - started) * 1000, 1)
 
     out = {
         "command": cmd,
         "mode": mode,
-        "action": top.action,
+        "decision": top.decision,
         "code": top.code,
+        "explanation": top.explanation,
         "reasons": top.reasons,
-        "ops": [{"op": s.op, "kind": s.kind,
+        "guard_latency_ms": latency_ms,
+        "ops": [{"op": s.op, "kind": s.kind, "shape": s.shape,
                  "undeterminable": s.undeterminable, "notes": s.notes}
                 for s in specs],
         "enforced": bool(args.enforce),
@@ -64,21 +70,32 @@ def main() -> int:
         if args.as_json:
             print(json.dumps(out, ensure_ascii=False, indent=2))
         else:
-            summary = f"{out['action']} [{out['code']}] {cmd[:120]}"
+            summary = f"{out['decision']} [{out['code']}] {cmd[:120]}"
             print(summary)
             for reason in out["reasons"][:4]:
                 print(f"  - {reason}")
         return code
 
     if not args.enforce:
-        audit.append({"event": "check", "action": top.action,
-                      "code": top.code, "command": cmd[:500]},
+        audit.append({"event": "check", "decision": top.decision,
+                      "code": top.code, "command": cmd[:500],
+                      "guard_latency_ms": latency_ms},
                      audit_path)
         return finish(0)
 
+    if top.asks:
+        # Single-execution authorization point. Adapters map this to their
+        # native ask UI; a harness without ask support degrades to deny
+        # while keeping the explanation (never silently allow).
+        audit.append({"event": "ask", "code": top.code,
+                      "command": cmd[:500], "reasons": top.reasons},
+                     audit_path)
+        return finish(3)
+
     if top.blocked:
         audit.append({"event": "enforce-block", "code": top.code,
-                      "command": cmd[:500], "reasons": top.reasons},
+                      "command": cmd[:500], "reasons": top.reasons,
+                      "guard_latency_ms": latency_ms},
                      audit_path)
         return finish(2)
 
@@ -87,7 +104,7 @@ def main() -> int:
     try:
         for spec, verdict in zip(specs, verdicts):
             if spec.kind == classifier.KIND_FS_DELETE and \
-                    verdict.action == policy.ACTION_RELOCATE:
+                    verdict.decision == policy.DECISION_RELOCATE:
                 target_specs = classifier.classify_paths(
                     spec.targets, base, workspace, trash_root)
                 report = engine.relocate(target_specs, meta={
@@ -95,7 +112,7 @@ def main() -> int:
                 compensations.append({"strategy": "relocate",
                                       "txid": report["txid"],
                                       "moved": len(report["moved"])})
-            elif verdict.code == policy.CODE_COMPENSATE_CLEAN_ENUMERATE:
+            elif verdict.code == policy.CODE_RELOCATE_VIA_CLEAN_ENUMERATE:
                 flags = getattr(spec, "extra_flags", [])
                 paths, err = engine.enumerate_git_clean(base, flags)
                 if err and not paths:
@@ -108,23 +125,34 @@ def main() -> int:
                 compensations.append({"strategy": "clean-enumerate",
                                       "txid": report["txid"],
                                       "moved": len(report["moved"])})
-            elif verdict.code == policy.CODE_COMPENSATE_SNAPSHOT:
+            elif verdict.code == policy.CODE_SNAPSHOT_GIT_STASH:
                 snap = engine.snapshot_git(cwd=base, meta={
                     "tool": "check --enforce", "command": cmd[:300]})
                 compensations.append({"strategy": "snapshot",
                                       "txid": snap["txid"],
                                       "sha": snap["sha"]})
+    except recovery.StorageUnavailable as exc:
+        # Hard principle: never fall back to permanent deletion.
+        out["decision"], out["code"] = "BLOCK", \
+            policy.CODE_BLOCK_RELOCATE_FAILED_STORAGE
+        out["reasons"] = [str(exc)]
+        audit.append({"event": "enforce-block", "code": out["code"],
+                      "command": cmd[:500], "reasons": out["reasons"]},
+                     audit_path)
+        return finish(2)
     except Exception as exc:  # compensation failed: refuse to proceed
-        out["action"], out["code"] = "BLOCKED", "COMPENSATION_FAILED"
+        out["decision"], out["code"] = "BLOCK", \
+            policy.CODE_BLOCK_COMPENSATION_FAILED
         out["reasons"] = [f"compensation error: {exc}"]
         audit.append({"event": "enforce-error", "command": cmd[:500],
                       "error": str(exc)}, audit_path)
         return finish(2)
 
     out["compensations"] = compensations
-    out["action"] = "PROCEED"
+    out["decision"] = "ALLOW"
     audit.append({"event": "enforce-proceed", "command": cmd[:500],
-                  "compensations": compensations}, audit_path)
+                  "compensations": compensations,
+                  "guard_latency_ms": latency_ms}, audit_path)
     return finish(0)
 
 

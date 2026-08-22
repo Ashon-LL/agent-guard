@@ -59,6 +59,32 @@ PROCEED with txids ──▶ original command runs
 Explicit-path tools skip the shell parsing front half:
 `safe_delete.py PATH... → classify_paths → decide_path_batch → relocate`.
 
+## The Decision Protocol
+
+The stable cross-harness interface is not allow/block:
+
+```
+Effect -> Classifier -> Policy -> Decision  ∈ {ALLOW, RELOCATE, SNAPSHOT,
+                                                ASK, BLOCK}
+                                 + ReasonCode   (stable, machine-readable)
+                                 + Explanation  (human-facing)
+                                 + RecoveryPlan (payload: txids, strategy)
+```
+
+Adapters map decisions to native mechanisms - DSH `PreToolDecision`,
+Claude Code PreToolUse `ask`, or, on harnesses without ask support, a deny
+that carries the explanation (never a silent allow). Harness capability
+thus never pollutes policy.
+
+Architecture invariant (B1): **the guard analyzes the shell command's
+direct effect; it does not infer the internal behavior of arbitrary
+programs.** `npm run build && rm -rf dist` is invisible to creation
+analysis by design - chasing program-internal effects would degrade the
+classifier into a poor shell program analyzer.
+
+Interaction tiers: SAFE (auto-execute, silent) / AMBIGUOUS (ASK_ONCE) /
+FORBIDDEN (BLOCK, never askable).
+
 ## Key design decisions
 
 1. **Effect-oriented, not dialect-oriented.** The classifier recognizes a

@@ -93,7 +93,8 @@ def main() -> int:
         "tool": "safe_delete",
         "mode": mode,
         "workspace": workspace,
-        "verdict": {"action": verdict.action, "code": verdict.code,
+        "verdict": {"decision": verdict.decision, "code": verdict.code,
+                    "explanation": verdict.explanation,
                     "reasons": verdict.reasons},
         "targets": [s.raw for s in specs],
         "no_match": unmatched,
@@ -102,7 +103,7 @@ def main() -> int:
 
     if verdict.blocked:
         audit.append({"event": "decision", "tool": "safe_delete",
-                      "action": "BLOCK", "code": verdict.code,
+                      "decision": "BLOCK", "code": verdict.code,
                       "reasons": verdict.reasons, "targets": result["targets"],
                       "reason": args.reason},
                      os.path.join(trash_root, AUDIT_NAME))
@@ -114,7 +115,7 @@ def main() -> int:
     if verdict.code == policy.CODE_ALLOW_NOOP:
         result["outcome"] = "nothing to do"
     elif args.dry_run:
-        result["outcome"] = f"would {verdict.action.lower()} ({verdict.code})"
+        result["outcome"] = f"would {verdict.decision.lower()} ({verdict.code})"
     elif verdict.code == policy.CODE_ALLOW_REGENERABLE:
         deleted = [delete_directly(s) for s in specs]
         result["outcome"] = "deleted directly (provably regenerable)"
@@ -126,13 +127,31 @@ def main() -> int:
     else:  # RELOCATE_*
         report = engine.relocate(specs, meta={
             "tool": "safe_delete", "code": verdict.code, "reason": args.reason})
+        if report.get("storage_failure"):
+            # Hard principle: capacity limits never downgrade to deletion.
+            result["verdict"] = {
+                "decision": "BLOCK",
+                "code": policy.CODE_BLOCK_RELOCATE_FAILED_STORAGE,
+                "reasons": ["quarantine storage unavailable; moved targets "
+                            "(if any) stay restorable in quarantine"],
+            }
+            result["outcome"] = "BLOCKED: quarantine cannot accept relocation"
+            result["exit"] = 2
+            audit.append({"event": "decision", "tool": "safe_delete",
+                          "decision": "BLOCK",
+                          "code": policy.CODE_BLOCK_RELOCATE_FAILED_STORAGE,
+                          "targets": result["targets"], "reason": args.reason},
+                         os.path.join(trash_root, AUDIT_NAME))
+            print(json.dumps(result, ensure_ascii=False, indent=2)
+                  if args.as_json else result["outcome"])
+            return 2
         result["outcome"] = "relocated to quarantine"
         result["txid"] = report["txid"]
         result["moved"] = report["moved"]
         result["skipped"] = report["skipped"]
 
     audit.append({"event": "decision", "tool": "safe_delete",
-                  "action": verdict.action, "code": verdict.code,
+                  "decision": verdict.decision, "code": verdict.code,
                   "targets": result["targets"], "txid": result.get("txid"),
                   "reason": args.reason},
                  os.path.join(trash_root, AUDIT_NAME))

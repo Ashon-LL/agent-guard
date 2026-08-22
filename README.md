@@ -1,11 +1,17 @@
 # agent-guard
 
-**A destructive-action reliability layer for AI agents.**
+**Make destructive agent actions reversible by default.**
 
 Agents increasingly run shell commands autonomously. When the command is
 `rm -rf`, a wrong variable or one misjudged context switch is all it takes
 to lose a repository - or worse. agent-guard makes destruction *reversible
 by default* and *audited always*, across any harness that can run Python.
+
+> Agent Guard is **not an approval system**. It is an automatic recovery
+> system with human escalation: the agent works uninterrupted while
+> operations stay reversible; only when the guard cannot safely automate -
+> but user intent may be legitimate - does a decision escalate to a human.
+> It is reliability infrastructure, not a security sandbox.
 
 > Agent 可以自主提出删除,也可以执行低风险、可恢复的删除,
 > 但不应默认拥有不可逆的数据销毁权。

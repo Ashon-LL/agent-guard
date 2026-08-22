@@ -10,9 +10,10 @@ The interceptor classifies against the tool call's declared workdir. A
 command like `cd subdir && rm -rf build` runs `rm` inside `subdir`, but the
 guard resolved `build` against the parent — wrong tree entirely.
 
-**Implemented (fail-closed):** classifier shape rule F1 marks such ops
-undeterminable → BLOCK_UNDETERMINABLE ("split the command"). Prompt guidance
-additionally asks for explicit workdirs / standalone commands.
+**Shipped, then superseded by the Decision Protocol:** shape rule F1 now
+yields decision=ASK (COMPOUND_CWD_DELETE) - single-execution authorization
+instead of a dead end. Verified live: the ask surfaced to the human, who
+declined; splitting the command avoids the prompt entirely.
 
 ## F2 · Create-then-delete in one line is a timing blind spot
 
@@ -26,10 +27,10 @@ in the repo WAS enumerated and relocated before `git clean -fd` could
 silently destroy it, then restored via `restore.py <txid>`. The guard saved
 exactly the class of file it exists for.
 
-**Implemented (fail-closed):** classifier shape rule F2 flags creation-before-
-destruction lines → BLOCK_UNDETERMINABLE. Position-independent compensations
-(`reset --hard` whole-tree stash; force-push, blocked anyway) are exempt by
-design. Prompt guidance additionally asks for standalone deletion commands.
+**Shipped, then superseded by the Decision Protocol:** shape rule F2 now
+yields decision=ASK (COMPOUND_CREATE_DELETE); position-independent
+compensations (`reset --hard` stash; force-push, blocked anyway) remain
+exempt. Verified live end-to-end, including the user declining the ask.
 
 ## F3 · Unmatched globs produced a self-contradicting BLOCK
 

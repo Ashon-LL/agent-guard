@@ -79,7 +79,8 @@ class OpSpec:
     extra_flags: List[str] = field(default_factory=list)  # scope letters for git clean
     segment_index: int = 0          # position of this op within the command line
     wildcard: bool = False       # any target contains glob syntax
-    undeterminable: bool = False # scope/targets cannot be resolved statically
+    undeterminable: bool = False # effect cannot be determined statically
+    shape: Optional[str] = None  # 'F1' | 'F2': compound-command shape facts
     notes: List[str] = field(default_factory=list)
 
     def note(self, text: str) -> None:
@@ -471,26 +472,28 @@ def _apply_shape_rules(specs: List[OpSpec], cd_positions: List[int],
         interception time, so target-dependent compensation cannot cover it.
         Position-independent compensations (reset --hard whole-tree stash,
         force-push which is blocked anyway) are exempt.
-    Both surface through the existing fail-closed path: undeterminable ->
-    BLOCK_UNDETERMINABLE with the reason attached.
+    Shapes are DECISION-CLASS facts, not effect-uncertainty: the operation
+    itself is well understood, only its safe automatic compensation is not.
+    Policy maps them to ASK (single-execution authorization), keeping true
+    effect-undeterminable cases on the BLOCK path.
     """
     for spec in specs:
         if spec.kind in (KIND_OTHER, KIND_UNKNOWN):
             continue
         idx = spec.segment_index
         if any(pos < idx for pos in cd_positions):
-            spec.undeterminable = True
+            spec.shape = "F1"
             spec.note(
-                "F1: destructive operation follows 'cd' within the same "
+                "destructive operation follows 'cd' within the same "
                 "command line; targets cannot be resolved against the "
-                "declared working directory - split into separate commands")
+                "declared working directory")
         if spec.kind in TARGET_DEPENDENT_KINDS and any(
                 pos < idx for pos in creation_positions):
-            spec.undeterminable = True
+            spec.shape = "F2"
             spec.note(
-                "F2: this command line creates files before destroying "
+                "this command line creates files before destroying "
                 "them; pre-execution compensation cannot see targets that "
-                "do not exist yet - split into separate commands")
+                "do not exist yet")
 
 
 def classify_command(cmd: str) -> Tuple[List[OpSpec], Optional[str]]:

@@ -21,12 +21,28 @@ import json
 import os
 import shutil
 import subprocess
+import time
 import errno
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import MANIFEST_NAME, TRASH_DIRNAME
 from .audit import new_txid, utc_now_iso
 from .classifier import PathSpec
+
+# Soft retention policy (docs/references: GC). Thresholds only MARK entries
+# GC_ELIGIBLE; actual purging is an explicit maintenance action - a system
+# that promises recoverability must never silently destroy its own evidence.
+SOFT_RETENTION_DAYS = 30
+SOFT_SIZE_LIMIT_BYTES = 5 * 1024 * 1024 * 1024  # 5 GiB
+
+_STORAGE_ERRNOS = {
+    getattr(errno, "ENOSPC", None),
+    getattr(errno, "EDQUOT", None),
+} - {None}
+
+
+class StorageUnavailable(OSError):
+    """Quarantine cannot accept new relocations (disk full / quota)."""
 
 
 class RecoveryEngine:
@@ -106,18 +122,27 @@ class RecoveryEngine:
             os.rename(src, dest)
             return
         except OSError as exc:
+            if exc.errno in _STORAGE_ERRNOS:
+                raise StorageUnavailable(
+                    f"quarantine storage unavailable: {exc}") from exc
             if exc.errno != errno.EXDEV:
                 raise
-        if os.path.islink(src):
-            link_target = os.readlink(src)
-            os.symlink(link_target, dest)
-            os.unlink(src)
-        elif os.path.isdir(src):
-            shutil.copytree(src, dest, symlinks=True)
-            shutil.rmtree(src)
-        else:
-            shutil.copy2(src, dest)
-            os.unlink(src)
+        try:
+            if os.path.islink(src):
+                link_target = os.readlink(src)
+                os.symlink(link_target, dest)
+                os.unlink(src)
+            elif os.path.isdir(src):
+                shutil.copytree(src, dest, symlinks=True)
+                shutil.rmtree(src)
+            else:
+                shutil.copy2(src, dest)
+                os.unlink(src)
+        except OSError as exc:
+            if exc.errno in _STORAGE_ERRNOS:
+                raise StorageUnavailable(
+                    f"quarantine storage unavailable: {exc}") from exc
+            raise
 
     # ----------------------------------------------------------- relocate
 
@@ -131,6 +156,7 @@ class RecoveryEngine:
         }]
         moved: List[Dict[str, Any]] = []
         skipped: List[Dict[str, Any]] = []
+        storage_failure = False
         for spec in specs:
             src = spec.resolved
             entry_base = {"raw": spec.raw}
@@ -142,14 +168,25 @@ class RecoveryEngine:
                 continue
             rel = os.path.relpath(src, self.workspace)
             dest = os.path.join(self.trash_root, txid, rel)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            self._move(src, dest)
+            try:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                self._move(src, dest)
+            except StorageUnavailable:
+                # Hard principle: capacity limits never downgrade to
+                # permanent deletion. Abort; the failed target stays at its
+                # origin untouched; callers map this to BLOCK.
+                storage_failure = True
+                records.append({"type": "relocate-failed", "txid": txid,
+                                "origin_path": src,
+                                "reason": "storage unavailable"})
+                break
             item = {"type": "relocate", "txid": txid,
                     "origin_path": src, "trash_path": dest}
             records.append(item)
             moved.append({"origin": src, "trash": dest})
         self._manifest_append(records)
-        return {"txid": txid, "moved": moved, "skipped": skipped}
+        return {"txid": txid, "moved": moved, "skipped": skipped,
+                "storage_failure": storage_failure}
 
     # ------------------------------------------------------ git snapshot
 
@@ -297,7 +334,7 @@ class RecoveryEngine:
     # ------------------------------------------------------------- status
 
     def usage(self) -> Dict[str, Any]:
-        """Size/count summary of the quarantine tree (for status/GC later)."""
+        """Size/count summary of the quarantine tree."""
         files = 0
         total = 0
         for root, _dirs, names in os.walk(self.trash_root):
@@ -313,3 +350,96 @@ class RecoveryEngine:
                     pass
         return {"files": files, "bytes": total,
                 "transactions": len(self.transactions())}
+
+    # ------------------------------------------------------ GC lifecycle
+
+    @staticmethod
+    def _parse_ts(value: Optional[str]) -> Optional[float]:
+        if not value:
+            return None
+        try:
+            return time.mktime(time.strptime(
+                value, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+        except (ValueError, TypeError):
+            return None
+
+    def tx_inventory(self) -> List[Dict[str, Any]]:
+        """Per-transaction age/size facts for retention decisions."""
+        inventory: List[Dict[str, Any]] = []
+        for txid, tx in self.transactions().items():
+            tx_dir = os.path.join(self.trash_root, txid)
+            total = 0
+            for root, _dirs, names in os.walk(tx_dir):
+                for name in names:
+                    p = os.path.join(root, name)
+                    if not os.path.islink(p):
+                        try:
+                            total += os.lstat(p).st_size
+                        except OSError:
+                            pass
+            created = self._parse_ts(tx.get("ts"))
+            inventory.append({
+                "txid": txid, "ts": tx.get("ts"), "created_epoch": created,
+                "bytes": total, "items": len(tx["items"]),
+            })
+        inventory.sort(key=lambda e: e.get("created_epoch") or 0)
+        return inventory
+
+    def gc_plan(self, now: Optional[float] = None,
+                retention_days: int = SOFT_RETENTION_DAYS,
+                size_limit_bytes: int = SOFT_SIZE_LIMIT_BYTES,
+                ) -> Dict[str, Any]:
+        """Mark GC_ELIGIBLE entries. Never deletes anything by itself.
+
+        Eligibility: older than the soft retention window, or - when the
+        quarantine exceeds the soft size cap - oldest-first until back
+        under the cap. The audit log is never eligible.
+        """
+        now = now if now is not None else time.time()
+        cutoff = now - retention_days * 86400
+        inventory = self.tx_inventory()
+        total = sum(e["bytes"] for e in inventory)
+        eligible: List[Dict[str, Any]] = []
+        for entry in inventory:
+            created = entry.get("created_epoch")
+            if created is not None and created < cutoff:
+                eligible.append({**entry, "reason": "age"})
+        remaining = total - sum(e["bytes"] for e in eligible)
+        if remaining > size_limit_bytes:
+            for entry in inventory:
+                if any(e["txid"] == entry["txid"] for e in eligible):
+                    continue
+                if remaining <= size_limit_bytes:
+                    break
+                if entry["bytes"] <= 0 and entry["items"] == 0:
+                    continue
+                eligible.append({**entry, "reason": "capacity"})
+                remaining -= entry["bytes"]
+        return {
+            "retention_days": retention_days,
+            "size_limit_bytes": size_limit_bytes,
+            "total_bytes": total,
+            "eligible": eligible,
+            "remaining_bytes_after_gc": max(remaining, 0),
+        }
+
+    def gc_execute(self, txids: List[str]) -> Dict[str, Any]:
+        """Purge explicit transactions; write manifest tombstones.
+
+        Audit records are NEVER removed - the QUARANTINED -> RESTORABLE ->
+        GC_ELIGIBLE -> PURGED lifecycle stays fully reconstructible.
+        """
+        purged: List[str] = []
+        missing: List[str] = []
+        records: List[Dict[str, Any]] = []
+        for txid in txids:
+            tx_dir = os.path.join(self.trash_root, txid)
+            if not os.path.isdir(tx_dir):
+                missing.append(txid)
+                continue
+            shutil.rmtree(tx_dir, ignore_errors=True)
+            records.append({"type": "purged", "txid": txid})
+            purged.append(txid)
+        if records:
+            self._manifest_append(records)
+        return {"purged": purged, "missing": missing}
