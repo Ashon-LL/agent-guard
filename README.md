@@ -127,7 +127,7 @@ compensation engine without restructuring.
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | pillars ↔ components, data flow, design decisions |
 | [docs/threat-model.md](docs/threat-model.md) | honest limits: what this is and is not |
-| [docs/friction.md](docs/friction.md) | what real agents taught us (F1–F8) |
+| [docs/friction.md](docs/friction.md) | what real agents taught us (F1–F9) |
 | [skills/delete-guard/references/policy.md](skills/delete-guard/references/policy.md) | full rule table and decision codes |
 
 ## Status & roadmap

@@ -115,6 +115,24 @@ Deliberate asymmetry preserved: the *boundary root* is physicalized, but
 *target* analysis stays lexical (deleting a symlink still deletes the link,
 never its target).
 
+## F9 · Workdir context is load-bearing
+
+Three separate incidents shared one root cause: a command executed under a
+different working directory than assumed.
+
+- `safe_delete.py` chained after a `cd` into another directory resolved its
+  target against the wrong workspace and self-blocked (KeyError on the
+  blocked-result shape).
+- Cloning a helper repository to `/tmp` was refused as
+  OUT_OF_WORKSPACE - correctly; the fix was moving the clone inside the
+  boundary, not weakening it.
+- An SSH smoke test flapped between failure and success until IPv4 was
+  forced; dual-stack hosts answer from different vantage points.
+
+Lesson for adapters: always pass an explicit workdir; lesson for agents:
+deletion commands deserve their own process, their own directory, and
+nothing else on the line.
+
 ## Verdict accuracy observed
 
 | Command | Verdict | Correct? |
