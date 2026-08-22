@@ -87,6 +87,34 @@ tests pin the shapes: operator+trailing-quoted-line, double heredoc,
 unterminated heredoc. This is also the cleanest example of the
 fail-closed trade: the bug was annoying and visible, never dangerous.
 
+## F7 · Heredoc terminator cut double-offset into following commands
+
+The F5 fix introduced its own bug: the cut after a found terminator was
+`out[nl + 1 + end_m.end():]` — but `end_m` was already searched from
+`nl + 1`, so its end index is absolute and adding `nl + 1` again pushed
+the cut deep into whatever command line followed the heredoc. The longer
+the body, the deeper the blade went, slicing trailing `sed`/quote-laden
+lines into unbalanced fragments — manufacturing the very parse errors the
+classifier refuses.
+
+**Fixed:** cut is now `out[end_m.end():]`. Regression test uses a
+deliberately LONG body (the short-body version passed even while broken -
+regression tests must span the length dimension too).
+
+## F8 · Unresolved workspace root broke boundary checks on macOS
+
+CI was green on all five Ubuntu jobs and red on all five macOS jobs. Root
+cause: on macOS `/var` is a symlink to `/private/var`. `tempfile.mkdtemp()`
+returned an unresolved `/var/...` path (test's idea of the workspace) while
+child processes reported their physical cwd `/private/var/...` — so every
+target compared against the wrong root string and came back
+BLOCK_OUT_OF_WORKSPACE.
+
+**Fixed:** `discover_workspace()` resolves its result through realpath.
+Deliberate asymmetry preserved: the *boundary root* is physicalized, but
+*target* analysis stays lexical (deleting a symlink still deletes the link,
+never its target).
+
 ## Verdict accuracy observed
 
 | Command | Verdict | Correct? |

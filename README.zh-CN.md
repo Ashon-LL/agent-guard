@@ -121,7 +121,7 @@ Skill 负责 Agent 行为引导,约束全部下沉 Core。未来的 `git-guard`�
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 四柱↔组件映射、数据流、关键设计决定 |
 | [docs/threat-model.md](docs/threat-model.md) | 诚实边界:它是什么、不是什么 |
-| [docs/friction.md](docs/friction.md) | 真实 Agent 撞出来的教训(F1–F6) |
+| [docs/friction.md](docs/friction.md) | 真实 Agent 撞出来的教训(F1–F8) |
 | [skills/delete-guard/references/policy.md](skills/delete-guard/references/policy.md) | 完整规则表与判决码 |
 
 ## 状态与路线图
