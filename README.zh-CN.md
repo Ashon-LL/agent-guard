@@ -1,5 +1,4 @@
-[![CI](https://github.com/OWNER/agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/agent-guard/actions/workflows/ci.yml)
-<!-- TODO: 推送后把 OWNER 替换为你的 GitHub 组织或用户名 -->
+[![CI](https://github.com/mokuyoaxis/agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/mokuyoaxis/agent-guard/actions/workflows/ci.yml)
 
 # agent-guard
 

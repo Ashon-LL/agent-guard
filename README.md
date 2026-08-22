@@ -1,5 +1,4 @@
-[![CI](https://github.com/OWNER/agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/agent-guard/actions/workflows/ci.yml)
-<!-- TODO: replace OWNER with your GitHub org/user after pushing -->
+[![CI](https://github.com/mokuyoaxis/agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/mokuyoaxis/agent-guard/actions/workflows/ci.yml)
 
 # agent-guard
 
