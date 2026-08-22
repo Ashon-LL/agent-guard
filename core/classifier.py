@@ -38,6 +38,13 @@ SEPARATORS = {";", "&", "&&", "|", "||"}
 GLOB_CHARS = ("*", "?", "[")
 INDETERMINACY_CHARS = ("$", "`")
 
+# Single-source keyword prefilter: harness adapters use it to skip
+# non-destructive traffic at regex cost before invoking check.py.
+DESTRUCTIVE_PREFILTER_RE = re.compile(
+    r"(^|[\s;&|(\/])(rm|rmdir|unlink|shred)\b"
+    r"|\bfind\b[^\n|;&]*-delete\b"
+    r"|\bgit\s+(clean|reset|restore|checkout|push)\b")
+
 # Rough prefilter for "does this opaque string smell destructive at all".
 # Only used for indirect execution (bash -c '...'), where the guard cannot
 # parse structure and therefore only needs a yes/no smell test.

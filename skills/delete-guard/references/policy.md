@@ -105,6 +105,12 @@ Soft policy: 30-day retention, 5 GiB cap. Thresholds only MARK transactions
 `QUARANTINED -> RESTORABLE -> GC_ELIGIBLE -> PURGED`; the audit log itself
 is never garbage-collected.
 
+Authority model: `gc.py --execute` is intentionally permitted
+non-interactively (scheduled maintenance is legitimate; purging
+already-quarantined evidence is lower-risk than capability escalation,
+which alone requires a human terminal). Every purge is audited with
+session identity.
+
 Hard principle: **capacity limits never downgrade to permanent deletion.**
 If the quarantine cannot accept a relocation, the decision is
 `RELOCATE_FAILED_STORAGE` -> BLOCK; the untouched target stays at its origin.

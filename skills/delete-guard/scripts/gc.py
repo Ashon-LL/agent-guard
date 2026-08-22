@@ -9,7 +9,13 @@ Default is a DRY PLAN: shows what is GC_ELIGIBLE (soft 30-day retention or
     gc.py --execute --all-eligible
 
 Every purge writes manifest tombstones and audit records; the audit log
-itself is never garbage-collected. Capacity limits NEVER cause the guard to
+itself is never garbage-collected.
+
+Authority model (deliberate): --execute is allowed non-interactively.
+Scheduled maintenance is legitimate, and purging already-quarantined
+evidence is categorically lower-risk than capability escalation (which DOES
+require a human terminal). Compensating control: every purge is audited
+with session identity, and the audit trail is immutable by policy. Capacity limits NEVER cause the guard to
 fall back to permanent deletion of live targets - see
 CODE_RELOCATE_FAILED_STORAGE.
 """

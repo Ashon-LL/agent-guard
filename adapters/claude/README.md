@@ -1,0 +1,63 @@
+# agent-guard adapter for Claude Code
+
+Wraps Claude Code's `PreToolUse` hook so every Bash command passes through
+the shared core (`skills/delete-guard/scripts/check.py`) before execution.
+The rule engine is not duplicated here - this adapter only translates the
+Decision Protocol onto Claude Code's native hook semantics.
+
+## Decision mapping
+
+| Core decision | Claude Code behavior |
+|---|---|
+| `ALLOW` (no compensation) | exit 0, silent |
+| `ALLOW` (compensation applied) | `permissionDecision: "allow"` + reason naming what was quarantined and the txid |
+| `ASK` (`COMPOUND_CWD_DELETE`, `COMPOUND_CREATE_DELETE`) | `permissionDecision: "ask"` - ASK_ONCE, reason shown to the human; splitting the command avoids future prompts |
+| `BLOCK` | exit 2 - stderr is fed back to **Claude**, so the model sees the code, the explanation, and the remediation |
+| guard failure | exit 2 (fail-closed) |
+
+Note the deliberate asymmetry: allow/ask reasons are user-facing, while
+BLOCK uses the stderr channel so the *model* learns the remediation.
+
+## Install
+
+1. Copy or reference this repository from a stable path.
+
+2. Add the hook to project `.claude/settings.json`
+   (see `settings.example.json`):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /absolute/path/to/agent-guard/adapters/claude/pre_tool_use.py",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+3. Optionally copy `skills/delete-guard/SKILL.md` into the project's skill
+   directory so the model prefers the safe-delete flow proactively.
+
+Requirements: Python 3.8+, `git`. No third-party packages.
+
+## Conformance
+
+`tests/test_conformance.py` pins the cross-harness guarantee: identical
+command + cwd + workspace state must produce identical core decision +
+reason code through any adapter. Run it after any change to either side:
+
+```
+python3 -m unittest tests.test_conformance
+```
+
+Debug: set `AGENT_GUARD_DEBUG=1` to print the raw core verdict JSON to
+stderr.
