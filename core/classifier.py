@@ -404,15 +404,47 @@ def _parse_git(segment: List[str]) -> OpSpec:
     return spec  # other git subcommands are out of V1 scope
 
 
+HEREDOC_OP_RE = re.compile(r"<<-?\s*([\"']?)([A-Za-z_][A-Za-z0-9_-]*)\1")
+
+
+def strip_heredocs(cmd: str) -> str:
+    """Remove heredoc bodies before classification (F5).
+
+    A redirection like cat-over-heredoc writes a FILE; its body is payload
+    text, not executable syntax. Scanning it produced false positives on
+    documentation and scripts containing destructive-looking strings.
+    The operator token itself is kept so upstream structure is preserved.
+    """
+    out = cmd
+    while True:
+        m = HEREDOC_OP_RE.search(out)
+        if not m:
+            return out
+        tag = m.group(2)
+        start = m.end()
+        nl = out.find("\n", start)
+        if nl == -1:
+            return out[:start]
+        terminator = re.compile(r"^\s*" + re.escape(tag) + r"\s*$",
+                                re.MULTILINE)
+        end_m = terminator.search(out, nl + 1)
+        if not end_m:
+            return out[:nl + 1]
+        out = out[:start] + " " + out[nl + 1 + end_m.end():]
+
+
 def classify_command(cmd: str) -> Tuple[List[OpSpec], Optional[str]]:
     """Parse one shell command line into destructive OpSpecs.
+
+    Heredoc bodies are stripped before parsing (they are written payload,
+    not commands - see docs/friction.md F5).
 
     Returns (specs, parse_error). Segments that are not destructive are
     returned as kind=OTHER and ignored by policy. A parse_error (unbalanced
     quoting) yields one undeterminable UNKNOWN spec - fail closed.
     """
     try:
-        tokens = shlex.split(cmd, posix=True)
+        tokens = shlex.split(strip_heredocs(cmd), posix=True)
     except ValueError as exc:
         fallback = OpSpec(op="<unparseable>", kind=KIND_UNKNOWN, undeterminable=True)
         fallback.note(f"shell parse error: {exc}")

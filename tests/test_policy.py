@@ -87,6 +87,16 @@ class ClassifierFacts(unittest.TestCase):
     def test_benign_command_yields_nothing(self):
         self.assertEqual(classify_command("ls -la && echo hi")[0], [])
 
+    def test_heredoc_body_is_payload_not_syntax(self):
+        # friction.md F5: quoted destructive text inside a heredoc is file
+        # content, not an executed command.
+        cmd = "cat > notes.md <<'EOF'\n" + \
+              "run rm -rf build to clean\n" + \
+              "and git clean -fd\n" + \
+              "EOF\necho done"
+        specs, err = classify_command(cmd)
+        self.assertEqual((specs, err), ([], None))
+
 
 class PolicyVerdicts(RepoFixture):
     def test_out_of_workspace_blocked(self):

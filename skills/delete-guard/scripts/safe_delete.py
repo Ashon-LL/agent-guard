@@ -23,14 +23,22 @@ from core import classifier, policy, recovery
 
 
 def expand_globs(patterns):
+    """Expand globs explicitly. Returns (concrete_paths, unmatched_patterns).
+
+    A pattern with no matches is NOT passed on as an opaque wildcard - it is
+    reported as 'no matches' instead of triggering a misleading BLOCK.
+    """
     out = []
+    unmatched = []
     for pattern in patterns:
         matches = globlib.glob(os.path.expanduser(pattern), recursive=True)
         if matches:
             out.extend(sorted(matches))
+        elif any(c in pattern for c in ("*", "?", "[")):
+            unmatched.append(pattern)
         else:
-            out.append(pattern)  # let policy report the miss explicitly
-    return out
+            out.append(pattern)  # literal path: let policy report the miss
+    return out, unmatched
 
 
 def delete_directly(spec):
@@ -61,8 +69,23 @@ def main() -> int:
     ctx = policy.PolicyContext(
         workspace=workspace, trash_root=trash_root, base_dir=base, mode=mode)
 
-    specs = classifier.classify_paths(
-        expand_globs(args.paths), base, workspace, trash_root)
+    concrete, unmatched = expand_globs(args.paths)
+    specs = classifier.classify_paths(concrete, base, workspace, trash_root)
+    if not specs and unmatched:
+        result = {
+            "tool": "safe_delete",
+            "mode": mode,
+            "workspace": workspace,
+            "verdict": {"action": "ALLOW", "code": "ALLOW_NOOP",
+                        "reasons": ["no matches for: " + ", ".join(unmatched)]},
+            "targets": list(args.paths),
+            "dry_run": args.dry_run,
+            "outcome": "nothing to do (no matches)",
+            "exit": 0,
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2) if args.as_json
+              else result["outcome"])
+        return 0
     verdict = policy.decide_path_batch(specs, ctx, recursive=True)
     engine = recovery.RecoveryEngine(workspace, trash_root)
 
@@ -73,6 +96,7 @@ def main() -> int:
         "verdict": {"action": verdict.action, "code": verdict.code,
                     "reasons": verdict.reasons},
         "targets": [s.raw for s in specs],
+        "no_match": unmatched,
         "dry_run": args.dry_run,
     }
 
