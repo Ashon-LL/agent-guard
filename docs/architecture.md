@@ -126,8 +126,11 @@ order of value:
 ## Roadmap
 
 - V1 (this repo): delete-guard skill, fs + git compensations, Linux/macOS.
-- V1.x: retention/GC policy for `.agent-trash`; Windows cmd/PowerShell
-  dialect support behind the same effect classifier.
+- v0.1.1: durable relocation intents, explicit retention/GC policy, quoted
+  Git-path safety, fail-closed compensation, clean audit preflight,
+  transaction lifecycle state, and adapter smoke coverage.
+- V1.x: Windows cmd/PowerShell dialect support behind the same effect
+  classifier; broader model/harness conformance matrix.
 - V2: `git-guard` skill (remote ref protection with lease semantics);
   adapter hardening (host-side mode storage, tamper-evident audit).
 - V3+: `database-guard` (compensations = transaction / backup /

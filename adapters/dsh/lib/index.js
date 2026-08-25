@@ -61,8 +61,7 @@ const DESTRUCTIVE_RE = new RegExp(
  * @param ctx - registrant context carrying injected services.
  * @param config - validated composition-row configuration.
  */
-function buildRuntime(ctx, config) {
-  const shell = ctx.shell;
+function buildRuntime(ctx, config, shell, systemPrompt) {
   const repoRoot = config.repoRoot || PACKAGE_ROOT;
   const scriptsDir = path.join(repoRoot, "skills", "delete-guard", "scripts");
   const pythonReady = fs.existsSync(path.join(scriptsDir, "check.py"));
@@ -114,7 +113,17 @@ function buildRuntime(ctx, config) {
     }
   }
 
-  return { shell, systemPrompt, runScript, outText, parseJson };
+  return {
+    shell,
+    systemPrompt,
+    repoRoot,
+    scriptsDir,
+    pythonReady,
+    shQuote,
+    runScript,
+    outText,
+    parseJson,
+  };
 }
 
 export function apply(ctx, config) {
@@ -124,10 +133,11 @@ export function apply(ctx, config) {
     return;
   }
   const systemPrompt = ctx.get ? ctx.get("systemPrompt") : undefined;
-  const rt = buildRuntime(ctx, config);
+  const rt = buildRuntime(ctx, config, shell, systemPrompt);
 
-  if (!fs.existsSync(rt.path.join(config.repoRoot || rt.PACKAGE_ROOT))) {
-    console.error("[agent-guard] configured repoRoot does not exist");
+  if (!rt.pythonReady) {
+    console.error("[agent-guard] check.py not found under", rt.repoRoot);
+    return;
   }
 
   ctx.effect(() => {

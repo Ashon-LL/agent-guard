@@ -69,7 +69,8 @@ def main() -> int:
           + (f" (since {state['since']} by {state['set_by']})" if state["since"] else ""))
     print(f"quarantine: {trash_root}")
     print(f"usage     : {usage['files']} files, {usage['bytes']} bytes, "
-          f"{usage['transactions']} transactions")
+          f"{usage['transactions']} transactions "
+          f"({usage['restorable_transactions']} restorable)")
     print(f"snapshots : {stash_count} agent-guard stashes")
     ret = info["retention"]
     print(f"retention : soft {ret['soft_days']}d / "

@@ -50,6 +50,8 @@ def main() -> int:
         usage = engine.usage()
         listing = [{"txid": t["txid"], "ts": t.get("ts"),
                     "items": len(t["items"]),
+                    "restorable_items": t.get("restorable_items", 0),
+                    "state": t.get("state", "EMPTY"),
                     "strategies": sorted({i.get("type") for i in t["items"]})}
                    for t in txs.values()]
         if args.as_json:
@@ -60,7 +62,8 @@ def main() -> int:
             print(f"files={usage['files']} bytes={usage['bytes']} "
                   f"transactions={usage['transactions']}")
             for item in listing[-20:]:
-                print(f"  {item['txid']}  {item['items']:>3} items  "
+                print(f"  {item['txid']}  {item['state']:<10} "
+                      f"{item['restorable_items']:>3}/{item['items']} items  "
                       f"{','.join(item['strategies'])}")
         return 0
 

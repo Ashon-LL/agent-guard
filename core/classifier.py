@@ -329,6 +329,7 @@ def _parse_git(segment: List[str]) -> OpSpec:
         spec.kind = KIND_GIT_CLEAN
         dry = False
         force = False
+        force_count = 0
         after_dd = False
         idx = 0
         while idx < len(rest):
@@ -341,6 +342,7 @@ def _parse_git(segment: List[str]) -> OpSpec:
                 name = tok[2:].split("=")[0]
                 if name == "force":
                     force = True
+                    force_count += 1
                 elif name == "dry-run":
                     dry = True
                 elif name == "directory":
@@ -350,7 +352,10 @@ def _parse_git(segment: List[str]) -> OpSpec:
                 elif name == "quiet":
                     pass
                 elif name == "exclude":
-                    idx += 1  # --exclude <pattern> consumes an argument
+                    spec.undeterminable = True
+                    spec.note("git clean exclude patterns are not safely mirrored")
+                    if "=" not in tok:
+                        idx += 1  # --exclude <pattern> consumes an argument
                 else:
                     spec.undeterminable = True
                     spec.note(f"unknown git clean flag --{name}")
@@ -361,14 +366,21 @@ def _parse_git(segment: List[str]) -> OpSpec:
                         dry = True
                     elif ch == "f":
                         force = True
+                        force_count += 1
                     elif ch == "d":
                         spec.extra_flags.append("-d")
                     elif ch == "x":
                         spec.extra_flags.append("-x")
                     elif ch == "X":
                         spec.extra_flags.append("-X")
-                    elif ch in ("i", "q", "e"):
+                    elif ch == "q":
                         pass
+                    elif ch == "i":
+                        spec.undeterminable = True
+                        spec.note("interactive git clean selection")
+                    elif ch == "e":
+                        spec.undeterminable = True
+                        spec.note("git clean exclude patterns are not safely mirrored")
                     else:
                         spec.undeterminable = True
                         spec.note(f"unknown git clean flag -{ch}")
@@ -376,6 +388,9 @@ def _parse_git(segment: List[str]) -> OpSpec:
             spec.targets.append(tok)
         spec.dry_run = dry
         spec.force = force and not dry
+        if force_count > 1:
+            spec.undeterminable = True
+            spec.note("double-force git clean may remove nested repositories")
         if not spec.targets and not spec.force and not dry:
             spec.dry_run = True  # git clean without -f is a dry run anyway
         _scan_targets(spec)

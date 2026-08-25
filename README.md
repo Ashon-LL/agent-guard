@@ -1,4 +1,11 @@
 [![CI](https://github.com/mokuyoaxis/agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/mokuyoaxis/agent-guard/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mokuyoaxis/agent-guard)](https://github.com/mokuyoaxis/agent-guard/releases)
+[![License](https://img.shields.io/github/license/mokuyoaxis/agent-guard)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Node.js 20 smoke](https://img.shields.io/badge/Node.js-20%20smoke-339933?logo=nodedotjs&logoColor=white)](.github/workflows/ci.yml)
+
+[![Codex tested](https://img.shields.io/badge/Codex-gpt--5.6--sol%20medium%20%2B%20high-000000?logo=openai&logoColor=white)](docs/test-report-codex-gpt-5.6-sol.md)
+[![DSH live-tested](https://img.shields.io/badge/DSH-v0.1.0%20live--tested-4D6BFE)](docs/friction.md)
 
 # agent-guard
 
@@ -8,7 +15,8 @@
 Agents increasingly run shell commands autonomously. When the command is
 `rm -rf`, a wrong variable or one misjudged context switch is all it takes
 to lose a repository — or worse. agent-guard makes destruction *reversible
-by default* and *audited always*, across any harness that can run Python.
+by default* and records durable intent before supported mutations, across any
+harness that can run Python.
 
 > **Agent Guard is not an approval system. It is an automatic recovery
 > system with human escalation.** The agent works uninterrupted while
@@ -25,7 +33,7 @@ by default* and *audited always*, across any harness that can run Python.
 | **Scope** | Workspace boundary, `.git`, and outside paths are never deletable |
 | **Recoverability** | Deletions relocate to `.agent-trash/` with a manifest; git overwrites snapshot first |
 | **Authorization** | Session-scoped capability; a veto downgrades one-way, only humans restore |
-| **Auditability** | Every verdict, compensation, and restore lands in append-only JSONL |
+| **Auditability** | Enforced verdicts, compensation intents, outcomes, and restores use append-only JSONL; mutation fails closed if its intent cannot be stored |
 
 A rule runs through all four: **uncertainty increases restriction.**
 
@@ -99,6 +107,7 @@ quarantine full          → BLOCK     (never fall back to permanent delete)
 | Harness | Status | Mechanism |
 |---|---|---|
 | **DSH** (DeepSeek Harness) | **published plugin** | `dsh plugin --profile <p> add github:mokuyoaxis/agent-guard` — waterfall interception + tools + prompt section |
+| **Codex** | reviewed (`gpt-5.6-sol`, high); forward-tested at medium, then medium + high | `delete-guard` skill + CLI under `workspace-write`; preflight supports a pre-ignored `.agent-trash/` when `.git` is read-only |
 | **Claude Code** | ready (`adapters/claude/`) | PreToolUse hook → `permissionDecision` allow/ask/deny |
 | OpenCode / MCP | planned | once conformance has proven out twice |
 
@@ -132,11 +141,17 @@ compensation engine without restructuring.
 
 ## Status & roadmap
 
-V1 hardening complete; `v0.1.0` release gate: CI (this repository),
-retention policy documented, Claude adapter conformance green.
-Next: second live adapter verification, retention automation,
-Windows dialects (demand-driven), then `database-guard` /
-`cloud-guard` on the same compensation engine.
+`v0.1.1` is the reliability-hardening candidate after live DSH `v0.1.0`
+usage, an initial fresh Codex forward test at `gpt-5.6-sol` medium, a high
+reasoning review, and a second paired forward test at medium and high. It adds
+write-ahead relocation intents, Git-quoted path safety, fail-closed Git
+compensation, clean audit preflight under read-only `.git`, explicit
+`RESTORABLE` / `RESTORED` lifecycle state, and a DSH runtime smoke test.
+The patch version is deliberate: this covers two reasoning levels but only one
+model family, so the model/harness validation matrix remains narrow. Next:
+additional Codex/Claude/DSH models and reasoning levels,
+Windows dialects (demand-driven), then `database-guard` / `cloud-guard` on
+the same compensation engine.
 
 ## License
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Delete Guard"
+  short_description: "Recoverable deletion discipline for coding agents"
+  default_prompt: "Use $delete-guard to remove workspace files through quarantine and stop safely when policy or compensation blocks."

@@ -133,14 +133,37 @@ Lesson for adapters: always pass an explicit workdir; lesson for agents:
 deletion commands deserve their own process, their own directory, and
 nothing else on the line.
 
+## F10 · Restored transactions still looked live
+
+Independent medium- and high-reasoning Codex runs both restored quarantined
+content successfully, then reported the same ambiguity: `restore.py list`
+still showed the transaction with its original item count, without saying
+whether those items remained recoverable or had already returned to origin.
+
+**Fixed in v0.1.1:** manifest grouping now exposes explicit `RESTORABLE`,
+`RESTORED`, `FAILED`, and `PURGED` state plus a live-item count. `status.py`
+separates historical transaction count from currently restorable count.
+
+## F11 · Auditing a refusal could dirty a fresh repository
+
+An enforced hard block correctly left every target untouched but appended
+`audit.jsonl` before ensuring `.agent-trash/` was ignored. The refusal itself
+therefore created an untracked path. Under read-only Git metadata, even a
+best-effort audit could not repair that status pollution afterward.
+
+**Fixed in v0.1.1:** establish an existing `.gitignore` or local exclude rule
+before creating audit storage. If protected Git metadata prevents that, retain
+the safer verdict, return an `audit unavailable` warning, and leave no new
+quarantine directory.
+
 ## Verdict accuracy observed
 
 | Command | Verdict | Correct? |
 |---|---|---|
 | `rm -rf build` (rooted dir) | RELOCATE_TREE → PROCEED | ✓ |
 | `rm -rf .` | BLOCK_PROTECTED_PATH | ✓ |
-| `rm -rf $UNSET/` | BLOCK_UNDETERMINABLE | ✓ |
-| `git clean -fd`, pre-existing untracked present | COMPENSATE_CLEAN_ENUMERATE; valuable file relocated | ✓ |
+| `rm -rf $UNSET/` | BLOCK_UNDETERMINABLE_EFFECT | ✓ |
+| `git clean -fd`, pre-existing untracked present | RELOCATE_VIA_CLEAN_ENUMERATE; valuable file relocated | ✓ |
 | `git clean -fd`, junk created by same line | proceeded unprotected | ✗ → F2 |
 | `safe_delete` mixed glob + file | relocate file, report no-match | ✓ after F3 fix |
 | heredoc write quoting destructive text | false BLOCK → fixed by strip_heredocs | ✓ after F5 |

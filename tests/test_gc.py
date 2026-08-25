@@ -2,6 +2,7 @@
 and the never-fallback-to-deletion storage principle."""
 import json
 import os
+from pathlib import Path
 import sys
 import time
 import unittest
@@ -27,7 +28,7 @@ class GcPlanTests(RepoFixture):
         engine = RecoveryEngine(self.root)
         report = engine.relocate(specs_for(engine, [rel]))
         if age_days:
-            lines = open(engine.manifest_path).read().splitlines()
+            lines = Path(engine.manifest_path).read_text().splitlines()
             for i, line in enumerate(lines):
                 rec = json.loads(line)
                 if rec.get("txid") == report["txid"] and \
@@ -36,7 +37,7 @@ class GcPlanTests(RepoFixture):
                     rec["ts"] = time.strftime(
                         "%Y-%m-%dT%H:%M:%SZ", time.gmtime(old))
                     lines[i] = json.dumps(rec, sort_keys=True)
-            open(engine.manifest_path, "w").write("\n".join(lines) + "\n")
+            Path(engine.manifest_path).write_text("\n".join(lines) + "\n")
         return engine, report["txid"]
 
     def test_fresh_tx_not_eligible(self):
@@ -64,8 +65,9 @@ class GcPlanTests(RepoFixture):
         self.assertEqual(report["purged"], [txid])
         self.assertFalse(os.path.isdir(
             os.path.join(engine.trash_root, txid)))
-        types = [json.loads(l)["type"] for l in open(engine.manifest_path)
-                 if l.strip()]
+        types = [json.loads(line)["type"] for line in
+                 Path(engine.manifest_path).read_text().splitlines()
+                 if line.strip()]
         self.assertIn("purged", types)
 
     def test_execute_reports_unknown_txid(self):
@@ -92,8 +94,7 @@ class StorageFailureTests(RepoFixture):
         # the hard principle: origin untouched, nothing fell back to deletion
         self.assertTrue(os.path.exists(
             os.path.join(self.root, "precious.txt")))
-        self.assertEqual(open(os.path.join(
-            self.root, "precious.txt")).read(), "keep")
+        self.assertEqual(Path(self.root, "precious.txt").read_text(), "keep")
 
 
 if __name__ == "__main__":

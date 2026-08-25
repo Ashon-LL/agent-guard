@@ -22,10 +22,12 @@ class RepoFixture(unittest.TestCase):
         self.root = tempfile.mkdtemp(prefix="agent-guard-test-")
         if git_available():
             git = lambda *a: subprocess.run(  # noqa: E731
-                ["git", "-C", self.root, *a], capture_output=True, text=True)
+                ["git", "-C", self.root, *a], capture_output=True, text=True,
+                check=True)
             git("init", "-q")
             git("config", "user.email", "test@local")
             git("config", "user.name", "test")
+            git("config", "commit.gpgsign", "false")
             with open(os.path.join(self.root, ".gitignore"), "w") as fh:
                 fh.write("node_modules/\n*.log\n")
             os.makedirs(os.path.join(self.root, "src"))

@@ -4,8 +4,8 @@ description: >-
   Recoverable deletion discipline for AI agents. Use whenever you need to
   delete, clean, or discard files/directories or run destructive git
   operations (clean, reset --hard, restore, force push) inside a workspace.
-  Guarantees quarantine-with-manifest instead of irreversible loss, and
-  explains what to do when the guard blocks you.
+  Routes supported operations through quarantine or Git snapshots, and
+  explains how to stop safely when compensation or policy blocks you.
 ---
 
 # delete-guard
@@ -52,8 +52,8 @@ can receive:
 
 | Verdict | Meaning | Your move |
 |---|---|---|
-| `PROCEED` | compensation already applied | continue; note the `txid` |
-| `BLOCK_UNDETERMINABLE` | targets unresolvable (`$VAR`, `bash -c`, `find -delete`, `xargs`) | restate with explicit paths, or use `safe_delete` |
+| `ALLOW` (harness may show `PROCEED`) | safe as-is or compensation already applied | continue; record and verify any `txid` |
+| `BLOCK_UNDETERMINABLE_EFFECT` | targets unresolvable (`$VAR`, `bash -c`, `find -delete`, `xargs`) | restate with explicit paths, or use `safe_delete` |
 | `BLOCK_WILDCARD` | glob target set is opaque | use `safe_delete` with the glob |
 | `BLOCK_OUT_OF_WORKSPACE` / `BLOCK_PROTECTED_PATH` | outside boundary, workspace root, or `.git` | do not retry; this is a hard boundary. Ask the human if it is truly needed |
 | `BLOCK_RESTRICTED_MODE` | session is downgraded | only explicit single-file deletes are permitted; ask the human for anything more |
@@ -64,14 +64,23 @@ destructive op (F1), or that creates files (`touch/mkdir/cp/mv/tee`,
 redirections) before destroying them (F2), is refused as undeterminable.
 Run deletions as standalone commands with an explicit workdir.
 
-Shape rules on compound commands: a single line that `cd`s anywhere before a
-destructive op (F1), or that creates files (`touch/mkdir/cp/mv/tee`,
-redirections) before destroying them (F2), is refused as undeterminable.
-Run deletions as standalone commands with an explicit workdir.
-
 A block is not an error to route around. Retrying the same operation in a
 disguised form (`/bin/rm`, `python -c`, a script) is a violation of the
 authorization pillar and is recorded in the audit log.
+
+## Compensation preflight and verification
+
+Before sandboxed use, ensure `.agent-trash/` is already ignored by a tracked
+`.gitignore` or by host-managed `.git/info/exclude`. If Git metadata is
+read-only and no ignore rule exists, the guard blocks before moving a source.
+
+After a relocation or snapshot, verify that its `txid` appears as
+`RESTORABLE` in `restore.py list` before running a related destructive command.
+After restoration, verify that a consumed relocation shows `RESTORED`.
+If the guard reports an internal, preflight, manifest, or compensation error,
+stop immediately. Inspect both the origin and `.agent-trash/`; never infer
+that an error means no filesystem change occurred. A durable
+`relocate-intent` can keep an interrupted relocation discoverable.
 
 ## RESTRICTED mode
 

@@ -32,7 +32,7 @@ bypass. Therefore:
 | 5 | Symlink confusion (delete link vs target, trailing slash dereference) | Lexical boundary analysis; link relocation preserves the link; realpath recorded | Low |
 | 6 | TOCTOU between classification and execution | Window is milliseconds inside one process; adapters that need more should classify-and-execute atomically | Small, acknowledged |
 | 7 | Destructive restore | Restore refuses overwrites without explicit human `--force`; all restores audited | Low |
-| 8 | Quarantine bloat turns `.agent-trash` into a liability (exfil via packaging, disk exhaustion) | Excluded via `.git/info/exclude`; `status.py` exposes size; GC is manual in V1 | Retention policy planned (V1.x) |
+| 8 | Quarantine bloat turns `.agent-trash` into a liability (exfil via packaging, disk exhaustion) | Existing `.gitignore` or `.git/info/exclude`; `status.py` exposes size; 30-day/5-GiB soft eligibility with explicit audited purge | A human or scheduler must execute purge; audit is retained |
 
 ## What would upgrade this to a security boundary
 

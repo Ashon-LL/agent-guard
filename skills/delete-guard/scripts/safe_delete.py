@@ -101,16 +101,79 @@ def main() -> int:
         "dry_run": args.dry_run,
     }
 
+    def record(entry, required=False):
+        """Append audit after safe layout setup.
+
+        Blocked requests retain their policy decision if audit storage is
+        unavailable. Mutation intents use `required=True` and fail closed.
+        """
+        try:
+            engine.ensure_layout()
+            audit.append(entry, os.path.join(trash_root, AUDIT_NAME))
+            return True
+        except Exception as exc:
+            if required:
+                raise
+            result.setdefault("warnings", []).append(
+                f"audit unavailable: {exc}")
+            return False
+
     if verdict.blocked:
-        audit.append({"event": "decision", "tool": "safe_delete",
-                      "decision": "BLOCK", "code": verdict.code,
-                      "reasons": verdict.reasons, "targets": result["targets"],
-                      "reason": args.reason},
-                     os.path.join(trash_root, AUDIT_NAME))
+        record({"event": "decision", "tool": "safe_delete",
+                "decision": "BLOCK", "code": verdict.code,
+                "reasons": verdict.reasons, "targets": result["targets"],
+                "reason": args.reason})
         result["exit"] = 2
         print(json.dumps(result, ensure_ascii=False, indent=2) if args.as_json
               else f"BLOCKED [{verdict.code}]: {verdict.reasons}")
         return 2
+
+    # Preflight every real mutation before recording authorization or touching
+    # a target. In sandboxes where `.git` is read-only this either confirms an
+    # existing ignore rule or fails while all source paths are still intact.
+    if not args.dry_run and verdict.code != policy.CODE_ALLOW_NOOP:
+        try:
+            engine.ensure_layout()
+        except Exception as exc:
+            result["verdict"] = {
+                "decision": "BLOCK",
+                "code": policy.CODE_BLOCK_COMPENSATION_FAILED,
+                "explanation": policy.EXPLANATIONS[
+                    policy.CODE_BLOCK_COMPENSATION_FAILED],
+                "reasons": [f"quarantine preflight failed: {exc}"],
+            }
+            result["outcome"] = "BLOCKED: quarantine preflight failed"
+            result["exit"] = 2
+            print(json.dumps(result, ensure_ascii=False, indent=2)
+                  if args.as_json else result["outcome"])
+            return 2
+
+    # Authorization/intent must be durable before direct deletion. Dry-run
+    # assessments are best-effort audited but never fail for audit storage.
+    if args.dry_run:
+        record({"event": "decision", "tool": "safe_delete",
+                "decision": verdict.decision, "code": verdict.code,
+                "targets": result["targets"], "phase": "advisory",
+                "reason": args.reason})
+    elif verdict.code != policy.CODE_ALLOW_NOOP:
+        try:
+            record({"event": "decision", "tool": "safe_delete",
+                    "decision": verdict.decision, "code": verdict.code,
+                    "targets": result["targets"], "phase": "intent",
+                    "reason": args.reason}, required=True)
+        except Exception as exc:
+            result["verdict"] = {
+                "decision": "BLOCK",
+                "code": policy.CODE_BLOCK_COMPENSATION_FAILED,
+                "explanation": policy.EXPLANATIONS[
+                    policy.CODE_BLOCK_COMPENSATION_FAILED],
+                "reasons": [f"audit intent failed: {exc}"],
+            }
+            result["outcome"] = "BLOCKED: durable audit intent failed"
+            result["exit"] = 2
+            print(json.dumps(result, ensure_ascii=False, indent=2)
+                  if args.as_json else result["outcome"])
+            return 2
 
     if verdict.code == policy.CODE_ALLOW_NOOP:
         result["outcome"] = "nothing to do"
@@ -137,11 +200,33 @@ def main() -> int:
             }
             result["outcome"] = "BLOCKED: quarantine cannot accept relocation"
             result["exit"] = 2
-            audit.append({"event": "decision", "tool": "safe_delete",
-                          "decision": "BLOCK",
-                          "code": policy.CODE_BLOCK_RELOCATE_FAILED_STORAGE,
-                          "targets": result["targets"], "reason": args.reason},
-                         os.path.join(trash_root, AUDIT_NAME))
+            record({"event": "decision", "tool": "safe_delete",
+                    "decision": "BLOCK",
+                    "code": policy.CODE_BLOCK_RELOCATE_FAILED_STORAGE,
+                    "targets": result["targets"], "reason": args.reason})
+            print(json.dumps(result, ensure_ascii=False, indent=2)
+                  if args.as_json else result["outcome"])
+            return 2
+        if report.get("skipped"):
+            result["verdict"] = {
+                "decision": "BLOCK",
+                "code": policy.CODE_BLOCK_COMPENSATION_FAILED,
+                "explanation": policy.EXPLANATIONS[
+                    policy.CODE_BLOCK_COMPENSATION_FAILED],
+                "reasons": ["relocation did not cover every target: " +
+                            repr(report["skipped"][:3])],
+            }
+            result["outcome"] = (
+                "BLOCKED: partial relocation remains recoverable")
+            result["txid"] = report["txid"]
+            result["moved"] = report["moved"]
+            result["skipped"] = report["skipped"]
+            result["exit"] = 2
+            record({"event": "decision", "tool": "safe_delete",
+                    "decision": "BLOCK",
+                    "code": policy.CODE_BLOCK_COMPENSATION_FAILED,
+                    "targets": result["targets"], "txid": report["txid"],
+                    "reason": args.reason})
             print(json.dumps(result, ensure_ascii=False, indent=2)
                   if args.as_json else result["outcome"])
             return 2
@@ -150,11 +235,11 @@ def main() -> int:
         result["moved"] = report["moved"]
         result["skipped"] = report["skipped"]
 
-    audit.append({"event": "decision", "tool": "safe_delete",
-                  "decision": verdict.decision, "code": verdict.code,
-                  "targets": result["targets"], "txid": result.get("txid"),
-                  "reason": args.reason},
-                 os.path.join(trash_root, AUDIT_NAME))
+    if not args.dry_run and verdict.code != policy.CODE_ALLOW_NOOP:
+        record({"event": "outcome", "tool": "safe_delete",
+                "targets": result["targets"], "txid": result.get("txid"),
+                "outcome": result.get("outcome"), "phase": "complete",
+                "reason": args.reason})
     result["exit"] = 0
     if args.as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

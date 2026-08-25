@@ -66,6 +66,20 @@ class ClassifierFacts(unittest.TestCase):
         self.assertTrue(forced.force)
         self.assertEqual(sorted(forced.extra_flags), ["-d", "-x"])
 
+    def test_git_clean_double_force_is_undeterminable(self):
+        specs, err = classify_command("git clean -ffd")
+        self.assertIsNone(err)
+        self.assertTrue(specs[0].undeterminable)
+        self.assertIn("nested repositories", " ".join(specs[0].notes))
+
+    def test_git_clean_interactive_and_excludes_are_undeterminable(self):
+        for cmd in ("git clean -ifd", "git clean -fd -e keep*",
+                    "git clean -fd --exclude=keep*"):
+            with self.subTest(cmd=cmd):
+                specs, err = classify_command(cmd)
+                self.assertIsNone(err)
+                self.assertTrue(specs[0].undeterminable)
+
     def test_git_reset_hard(self):
         self.assertEqual(one(classify_command("git reset --hard")[0]).kind,
                          KIND_GIT_RESET_HARD)

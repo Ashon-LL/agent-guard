@@ -12,8 +12,9 @@ Everything lands in an append-only manifest (JSONL). Restore is itself
 non-destructive: it refuses to overwrite anything that now exists at the
 origin path unless the human passes force explicitly.
 
-The quarantine directory is excluded from git via .git/info/exclude - never
-by touching the user's .gitignore.
+The quarantine directory must be Git-ignored before it is created. An existing
+repository `.gitignore` rule is accepted; otherwise the engine adds a local
+`.git/info/exclude` rule without modifying the user's tracked files.
 """
 from __future__ import annotations
 
@@ -58,30 +59,64 @@ class RecoveryEngine:
         return os.path.join(self.trash_root, MANIFEST_NAME)
 
     def ensure_layout(self) -> None:
-        os.makedirs(self.trash_root, exist_ok=True)
+        # Establish the ignore rule first. If protected Git metadata prevents
+        # this, fail without leaving a new untracked quarantine directory.
         self._exclude_from_git()
+        os.makedirs(self.trash_root, exist_ok=True)
+
+    def _trash_is_git_ignored(self) -> bool:
+        """Whether Git already excludes the quarantine path.
+
+        Codex and other harness sandboxes commonly protect `.git` from writes.
+        A repository-level `.gitignore` is sufficient in that environment, so
+        do not require a redundant `.git/info/exclude` mutation.
+        """
+        try:
+            rel = os.path.relpath(self.trash_root, self.workspace)
+            if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+                return True  # external quarantine cannot pollute this repo
+            git_rel = rel.replace(os.sep, "/").rstrip("/") + "/"
+            proc = subprocess.run(
+                ["git", "-C", self.workspace, "check-ignore", "-q",
+                 "--no-index", "--", git_rel],
+                capture_output=True, timeout=10)
+            return proc.returncode == 0
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return False
 
     def _exclude_from_git(self) -> None:
         """Hide the quarantine from git status via .git/info/exclude."""
-        git_dir = os.path.join(self.workspace, ".git")
-        if not os.path.isdir(git_dir):  # not a repo root; nothing to exclude
+        git_marker = os.path.join(self.workspace, ".git")
+        if not os.path.exists(git_marker):  # dir or worktree pointer file
             return
-        info = os.path.join(git_dir, "info")
-        exclude = os.path.join(info, "exclude")
+        if self._trash_is_git_ignored():
+            return
+        resolved = subprocess.run(
+            ["git", "-C", self.workspace, "rev-parse", "--git-path",
+             "info/exclude"], capture_output=True, text=True, timeout=10)
+        if resolved.returncode != 0 or not resolved.stdout.strip():
+            raise OSError((resolved.stderr or
+                           "cannot resolve Git exclude path").strip())
+        exclude = resolved.stdout.strip()
+        if not os.path.isabs(exclude):
+            exclude = os.path.join(self.workspace, exclude)
+        info = os.path.dirname(exclude)
         os.makedirs(info, exist_ok=True)
         try:
             with open(exclude, "r", encoding="utf-8") as fh:
                 existing = fh.read()
         except OSError:
             existing = ""
+        rel = os.path.relpath(self.trash_root, self.workspace).replace(os.sep, "/")
+        pattern = f"/{rel.strip('/')}/"
         for line in existing.splitlines():
-            if line.strip() == TRASH_DIRNAME:
+            if line.strip() in (TRASH_DIRNAME, pattern):
                 return
         with open(exclude, "a", encoding="utf-8") as fh:
             if existing and not existing.endswith("\n"):
                 fh.write("\n")
             fh.write(f"# added by agent-guard (quarantine is not project data)\n")
-            fh.write(f"{TRASH_DIRNAME}\n")
+            fh.write(f"{pattern}\n")
 
     # ------------------------------------------------------------ manifest
 
@@ -92,6 +127,8 @@ class RecoveryEngine:
                 record.setdefault("ts", utc_now_iso())
                 fh.write(json.dumps(record, ensure_ascii=False,
                                     sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
 
     def read_manifest(self) -> List[Dict[str, Any]]:
         path = self.manifest_path
@@ -150,10 +187,13 @@ class RecoveryEngine:
                  meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Move every concrete target into trash/<txid>/<workspace-relative>."""
         txid = txid or new_txid()
-        records: List[Dict[str, Any]] = [{
+        # Write-ahead journal: no source mutation may happen until the
+        # transaction exists durably. Each target intent is durable before its
+        # move, so an interrupted completion write remains discoverable.
+        self._manifest_append([{
             "type": "tx-start", "txid": txid, "strategy": "relocate",
             "meta": meta or {},
-        }]
+        }])
         moved: List[Dict[str, Any]] = []
         skipped: List[Dict[str, Any]] = []
         storage_failure = False
@@ -168,6 +208,10 @@ class RecoveryEngine:
                 continue
             rel = os.path.relpath(src, self.workspace)
             dest = os.path.join(self.trash_root, txid, rel)
+            intent = {"type": "relocate-intent", "txid": txid,
+                      "origin_path": src, "trash_path": dest,
+                      "raw": spec.raw}
+            self._manifest_append([intent])
             try:
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 self._move(src, dest)
@@ -176,15 +220,23 @@ class RecoveryEngine:
                 # permanent deletion. Abort; the failed target stays at its
                 # origin untouched; callers map this to BLOCK.
                 storage_failure = True
-                records.append({"type": "relocate-failed", "txid": txid,
-                                "origin_path": src,
-                                "reason": "storage unavailable"})
+                self._manifest_append([{
+                    "type": "relocate-failed", "txid": txid,
+                    "origin_path": src, "trash_path": dest,
+                    "reason": "storage unavailable",
+                }])
                 break
+            except OSError as exc:
+                self._manifest_append([{
+                    "type": "relocate-failed", "txid": txid,
+                    "origin_path": src, "trash_path": dest,
+                    "reason": str(exc),
+                }])
+                raise
             item = {"type": "relocate", "txid": txid,
                     "origin_path": src, "trash_path": dest}
-            records.append(item)
+            self._manifest_append([item])
             moved.append({"origin": src, "trash": dest})
-        self._manifest_append(records)
         return {"txid": txid, "moved": moved, "skipped": skipped,
                 "storage_failure": storage_failure}
 
@@ -203,8 +255,10 @@ class RecoveryEngine:
         create = subprocess.run(["git", "-C", cwd, "stash", "create"],
                                 capture_output=True, text=True, timeout=30)
         if create.returncode != 0:
-            return {"txid": txid, "sha": None, "stored": False,
-                    "error": (create.stderr or "git stash create failed").strip()}
+            return {"ok": False, "clean": False, "txid": txid,
+                    "sha": None, "stored": False,
+                    "error": (create.stderr or
+                              "git stash create failed").strip()}
         sha = create.stdout.strip()
         if not sha:
             self._manifest_append([{
@@ -212,20 +266,64 @@ class RecoveryEngine:
                 "note": "working tree clean; nothing to snapshot",
                 "meta": meta or {},
             }])
-            return {"txid": txid, "sha": None, "stored": False}
+            return {"ok": True, "clean": True, "txid": txid,
+                    "sha": None, "stored": False, "error": ""}
         store = subprocess.run(
             ["git", "-C", cwd, "stash", "store", "-m", f"agent-guard:{txid}", sha],
             capture_output=True, text=True, timeout=30)
+        stored = store.returncode == 0
+        error = "" if stored else (
+            store.stderr or "git stash store failed").strip()
         self._manifest_append([{
             "type": "snapshot", "txid": txid, "sha": sha,
-            "stored": store.returncode == 0, "meta": meta or {},
+            "stored": stored, "error": error, "meta": meta or {},
         }])
-        return {"txid": txid, "sha": sha, "stored": store.returncode == 0}
+        return {"ok": stored, "clean": False, "txid": txid, "sha": sha,
+                "stored": stored, "error": error}
 
     # --------------------------------------------------- git clean enum
 
+    @staticmethod
+    def _decode_git_quoted_path(value: str) -> str:
+        """Decode Git's double-quoted C-style path representation."""
+        if len(value) < 2 or not (value.startswith('"') and
+                                  value.endswith('"')):
+            return value
+        data = value[1:-1]
+        result = bytearray()
+        escapes = {
+            "a": 7, "b": 8, "t": 9, "n": 10, "v": 11,
+            "f": 12, "r": 13, "\\": 92, '"': 34,
+        }
+        i = 0
+        while i < len(data):
+            ch = data[i]
+            if ch != "\\":
+                result.extend(os.fsencode(ch))
+                i += 1
+                continue
+            i += 1
+            if i >= len(data):
+                raise ValueError("trailing backslash in Git-quoted path")
+            esc = data[i]
+            if esc in "01234567":
+                digits = esc
+                i += 1
+                while i < len(data) and len(digits) < 3 and data[i] in "01234567":
+                    digits += data[i]
+                    i += 1
+                result.append(int(digits, 8))
+                continue
+            if esc not in escapes:
+                raise ValueError(f"unknown Git path escape: \\{esc}")
+            result.append(escapes[esc])
+            i += 1
+        return os.fsdecode(bytes(result))
+
     def enumerate_git_clean(self, cwd: Optional[str],
-                            clean_flags: List[str]) -> Tuple[List[str], str]:
+                            clean_flags: List[str],
+                            targets: Optional[List[str]] = None,
+                            ) -> Tuple[List[str], str]:
         """Dry-run `git clean` mirroring the caller's scope flags.
 
         Returns (untracked_paths, stderr). Nested repositories are reported
@@ -237,17 +335,36 @@ class RecoveryEngine:
         for flag in clean_flags:
             if flag in allowed:
                 mirror.append(flag)
+        if targets:
+            mirror.extend(["--", *targets])
+        env = dict(os.environ)
+        env["LC_ALL"] = "C"
         proc = subprocess.run(["git", "-C", cwd, "clean"] + mirror,
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=60,
+                              env=env)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or
+                      "git clean dry-run failed").strip()
+            return [], detail
         paths: List[str] = []
+        unparsed: List[str] = []
         for line in proc.stdout.splitlines():
             line = line.strip()
+            if not line:
+                continue
+            if line.startswith("Would skip repository "):
+                continue
             if not line.startswith("Would remove "):
-                continue  # 'Would skip repository ...' etc. stay untouched
+                unparsed.append(line)
+                continue
             target = line[len("Would remove "):].strip()
-            if target.startswith('"') and target.endswith('"'):
-                target = target[1:-1]  # core.quotePath escaping; best effort
-            paths.append(target)
+            try:
+                paths.append(self._decode_git_quoted_path(target))
+            except ValueError as exc:
+                return [], f"cannot decode git clean path {target!r}: {exc}"
+        if unparsed:
+            return [], "unrecognized git clean dry-run output: " + \
+                "; ".join(unparsed[:3])
         return paths, proc.stderr.strip()
 
     # ------------------------------------------------------------- restore
@@ -263,8 +380,55 @@ class RecoveryEngine:
             if record.get("type") == "tx-start":
                 slot["meta"] = record.get("meta", {})
                 slot["ts"] = record.get("ts")
-            else:
+            elif record.get("type") in ("relocate", "snapshot"):
                 slot["items"].append(record)
+            elif record.get("type") == "relocate-intent":
+                slot.setdefault("_intents", []).append(record)
+            elif record.get("type") == "relocate-failed":
+                slot.setdefault("failures", []).append(record)
+            elif record.get("type") == "restore":
+                slot["last_restore"] = record
+            elif record.get("type") == "purged":
+                slot["purged"] = True
+
+        # If a move succeeded but its completion record could not be written,
+        # the durable intent plus filesystem state is sufficient to recover.
+        for slot in out.values():
+            completed = {
+                (item.get("origin_path"), item.get("trash_path"))
+                for item in slot["items"] if item.get("type") == "relocate"
+            }
+            for intent in slot.pop("_intents", []):
+                key = (intent.get("origin_path"), intent.get("trash_path"))
+                if key in completed:
+                    continue
+                origin, trash = key
+                if trash and os.path.lexists(trash):
+                    slot["items"].append({
+                        **intent, "type": "relocate",
+                        "recovered_from_intent": True,
+                    })
+            live_items = 0
+            for item in slot["items"]:
+                if item.get("type") == "relocate" and \
+                        os.path.lexists(item.get("trash_path", "")):
+                    live_items += 1
+                elif item.get("type") == "snapshot" and item.get("sha"):
+                    # Stored stashes are deliberately retained after apply.
+                    live_items += 1
+            slot["restorable_items"] = live_items
+            restored = slot.get("last_restore", {})
+            if slot.get("purged"):
+                slot["state"] = "PURGED"
+            elif restored.get("restored") and not restored.get("errors") and \
+                    not restored.get("conflicts"):
+                slot["state"] = "RESTORED"
+            elif live_items:
+                slot["state"] = "RESTORABLE"
+            elif slot.get("failures"):
+                slot["state"] = "FAILED"
+            else:
+                slot["state"] = "EMPTY"
         return out
 
     def restore(self, txid: str, force: bool = False,
@@ -348,8 +512,18 @@ class RecoveryEngine:
                     files += 1
                 except OSError:
                     pass
-        return {"files": files, "bytes": total,
-                "transactions": len(self.transactions())}
+        transactions = self.transactions()
+        return {
+            "files": files,
+            "bytes": total,
+            "transactions": len(transactions),
+            "restorable_transactions": sum(
+                1 for tx in transactions.values()
+                if tx.get("state") == "RESTORABLE"),
+            "restorable_items": sum(
+                tx.get("restorable_items", 0)
+                for tx in transactions.values()),
+        }
 
     # ------------------------------------------------------ GC lifecycle
 

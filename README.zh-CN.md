@@ -1,4 +1,11 @@
 [![CI](https://github.com/mokuyoaxis/agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/mokuyoaxis/agent-guard/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mokuyoaxis/agent-guard)](https://github.com/mokuyoaxis/agent-guard/releases)
+[![License](https://img.shields.io/github/license/mokuyoaxis/agent-guard)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Node.js 20 smoke](https://img.shields.io/badge/Node.js-20%20smoke-339933?logo=nodedotjs&logoColor=white)](.github/workflows/ci.yml)
+
+[![Codex tested](https://img.shields.io/badge/Codex-gpt--5.6--sol%20medium%20%2B%20high-000000?logo=openai&logoColor=white)](docs/test-report-codex-gpt-5.6-sol.md)
+[![DSH live-tested](https://img.shields.io/badge/DSH-v0.1.0%20live--tested-4D6BFE)](docs/friction.md)
 
 # agent-guard
 
@@ -6,8 +13,8 @@
 **[English](README.md)**
 
 Agent 正在越来越多地自主执行 shell 命令。当命令是 `rm -rf` 时,一个错误的变量、
-一次误判的上下文,就足以让整个仓库灰飞烟灭。agent-guard 让破坏*默认可逆*、
-*全程留痕*,并且可以接入任何能跑 Python 的 harness。
+一次误判的上下文,就足以让整个仓库灰飞烟灭。agent-guard 让破坏*默认可逆*，
+并在支持的修改前持久记录 intent，可接入任何能跑 Python 的 harness。
 
 > **Agent Guard 不是审批系统,而是带人工升级的自动恢复系统。**
 > 只要操作保持可逆,Agent 就不被打断;只有当 Guard 无法安全代办、
@@ -23,7 +30,7 @@ Agent 正在越来越多地自主执行 shell 命令。当命令是 `rm -rf` 时
 | **Scope(边界)** | Workspace 边界、`.git` 与外部路径永不可删 |
 | **Recoverability(可恢复)** | 删除先迁移到 `.agent-trash/` 并记录 manifest;git 覆写先做快照 |
 | **Authorization(授权)** | 会话级能力;否决即单向降权,只有人类能恢复 |
-| **Auditability(审计)** | 每个判决、每次补偿与恢复都落入追加式 JSONL |
+| **Auditability(审计)** | 强制判决、补偿 intent、结果与恢复写入追加式 JSONL；intent 无法持久化时拒绝修改 |
 
 贯穿四者的一条原则:**不确定性提升限制**(fail-closed)。
 
@@ -95,6 +102,7 @@ node_modules/(已 ignore) → ALLOW     (可证明可再生)
 | Harness | 状态 | 机制 |
 |---|---|---|
 | **DSH**(DeepSeek Harness) | **已发布插件** | `dsh plugin --profile <p> add github:mokuyoaxis/agent-guard`——瀑布拦截 + 工具 + 提示层 |
+| **Codex** | 主审(`gpt-5.6-sol`,high)；先 medium，后 medium + high 前向测试 | `delete-guard` skill + `workspace-write` 下的 CLI；`.git` 只读时支持预先 ignore 的 `.agent-trash/` |
 | **Claude Code** | 就绪(`adapters/claude/`) | PreToolUse hook → `permissionDecision` allow/ask/deny |
 | OpenCode / MCP | 规划中 | 待一致性保证在两个适配器上验证后再扩 |
 
@@ -126,10 +134,16 @@ Skill 负责 Agent 行为引导,约束全部下沉 Core。未来的 `git-guard`�
 
 ## 状态与路线图
 
-V1 加固完成;`v0.1.0` 发布门槛:CI(本仓库)、保留期政策文档化、
-Claude 适配器一致性全绿。下一步:第二个适配器真机验证、保留期自动化、
-Windows 方言(需求驱动),然后在同一补偿引擎上扩展 `database-guard`
-与 `cloud-guard`。
+`v0.1.1` 是在 DSH `v0.1.0` 真机使用、首次 `gpt-5.6-sol` medium
+前向测试、high 主审，以及第二轮 medium + high 并行前向测试之后的
+可靠性加固候选版。它加入预写式迁移 intent、Git 转义路径安全、Git 补偿
+fail-closed、只读 `.git` 下不污染工作树的审计预检、明确的
+`RESTORABLE` / `RESTORED` 生命周期状态和 DSH 运行时 smoke test。
+仍使用 patch 版本是有意的:虽然覆盖两个 reasoning
+level，但仍只有一个模型家族，当前多模型、多 harness 验证矩阵还很窄。
+下一步将扩展 Codex/Claude/DSH 的模型与 reasoning level，
+再按需求支持 Windows 方言，以及同一补偿引擎上的 `database-guard` /
+`cloud-guard`。
 
 ## 许可证
 

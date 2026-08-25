@@ -3,7 +3,8 @@
 
     check.py [--cwd DIR] [--enforce] [--json] -- COMMAND...
 
-Advisory mode (default): prints the verdict, touches nothing.
+Advisory mode (default): prints the verdict and does not mutate command
+targets. It records the assessment when audit storage is available.
 --enforce: performs the compensations first (relocate targets / git snapshot
 / git-clean enumeration+relocation) and tells the caller to PROCEED, or
 refuses with BLOCKED. Any BLOCK in the line means nothing is executed.
@@ -76,32 +77,58 @@ def main() -> int:
                 print(f"  - {reason}")
         return code
 
+    def record(entry):
+        """Append enforcement audit without ever changing the verdict.
+
+        Establishing the ignore rule before the audit directory prevents a
+        blocked request from dirtying a fresh Git worktree. If audit storage
+        is unavailable, keep the safer decision and report the degradation.
+        """
+        try:
+            engine.ensure_layout()
+            audit.append(entry, audit_path)
+            return True
+        except Exception as exc:
+            out.setdefault("warnings", []).append(
+                f"audit unavailable: {exc}")
+            return False
+
     if not args.enforce:
-        audit.append({"event": "check", "decision": top.decision,
-                      "code": top.code, "command": cmd[:500],
-                      "guard_latency_ms": latency_ms},
-                     audit_path)
+        record({"event": "check", "decision": top.decision,
+                "code": top.code, "command": cmd[:500],
+                "guard_latency_ms": latency_ms})
         return finish(0)
 
     if top.asks:
         # Single-execution authorization point. Adapters map this to their
         # native ask UI; a harness without ask support degrades to deny
         # while keeping the explanation (never silently allow).
-        audit.append({"event": "ask", "code": top.code,
-                      "command": cmd[:500], "reasons": top.reasons},
-                     audit_path)
+        record({"event": "ask", "code": top.code,
+                "command": cmd[:500], "reasons": top.reasons})
         return finish(3)
 
     if top.blocked:
-        audit.append({"event": "enforce-block", "code": top.code,
-                      "command": cmd[:500], "reasons": top.reasons,
-                      "guard_latency_ms": latency_ms},
-                     audit_path)
+        record({"event": "enforce-block", "code": top.code,
+                "command": cmd[:500], "reasons": top.reasons,
+                "guard_latency_ms": latency_ms})
         return finish(2)
 
     # Execute compensations in order; collect evidence of recoverability.
     compensations = []
     try:
+        # Preflight quarantine metadata before enumeration or any mutation.
+        # This also excludes `.agent-trash` before `git clean -n` can see it.
+        mutating_codes = {
+            policy.CODE_ALLOW_REGENERABLE,
+            policy.CODE_ALLOW_TRASH_GC,
+            policy.CODE_RELOCATE_PATHS,
+            policy.CODE_RELOCATE_TREE,
+            policy.CODE_RELOCATE_NARROW,
+            policy.CODE_RELOCATE_VIA_CLEAN_ENUMERATE,
+            policy.CODE_SNAPSHOT_GIT_STASH,
+        }
+        if any(verdict.code in mutating_codes for verdict in verdicts):
+            engine.ensure_layout()
         for spec, verdict in zip(specs, verdicts):
             if spec.kind == classifier.KIND_FS_DELETE and \
                     verdict.decision == policy.DECISION_RELOCATE:
@@ -109,25 +136,46 @@ def main() -> int:
                     spec.targets, base, workspace, trash_root)
                 report = engine.relocate(target_specs, meta={
                     "tool": "check --enforce", "command": cmd[:300]})
+                if report.get("storage_failure"):
+                    raise recovery.StorageUnavailable(
+                        "quarantine storage unavailable during relocation")
+                if report.get("skipped"):
+                    raise RuntimeError(
+                        "relocation did not cover every requested target: " +
+                        repr(report["skipped"][:3]))
                 compensations.append({"strategy": "relocate",
                                       "txid": report["txid"],
                                       "moved": len(report["moved"])})
             elif verdict.code == policy.CODE_RELOCATE_VIA_CLEAN_ENUMERATE:
                 flags = getattr(spec, "extra_flags", [])
-                paths, err = engine.enumerate_git_clean(base, flags)
-                if err and not paths:
-                    out["warnings"] = [f"git clean enumeration: {err}"]
+                paths, err = engine.enumerate_git_clean(
+                    base, flags, getattr(spec, "targets", []))
+                if err:
+                    raise RuntimeError(f"git clean enumeration failed: {err}")
                 target_specs = classifier.classify_paths(
                     paths, base, workspace, trash_root)
                 report = engine.relocate(target_specs, meta={
                     "tool": "check --enforce", "strategy": "clean-enumerate",
                     "command": cmd[:300]})
+                if report.get("storage_failure"):
+                    raise recovery.StorageUnavailable(
+                        "quarantine storage unavailable during git clean")
+                if report.get("skipped") or len(report["moved"]) != len(paths):
+                    raise RuntimeError(
+                        "git clean compensation did not cover every enumerated "
+                        f"target (enumerated={len(paths)}, "
+                        f"moved={len(report['moved'])}, "
+                        f"skipped={report.get('skipped', [])[:3]})")
                 compensations.append({"strategy": "clean-enumerate",
                                       "txid": report["txid"],
                                       "moved": len(report["moved"])})
             elif verdict.code == policy.CODE_SNAPSHOT_GIT_STASH:
                 snap = engine.snapshot_git(cwd=base, meta={
                     "tool": "check --enforce", "command": cmd[:300]})
+                if not snap.get("ok"):
+                    raise RuntimeError(
+                        "git snapshot failed: " +
+                        (snap.get("error") or "unknown snapshot failure"))
                 compensations.append({"strategy": "snapshot",
                                       "txid": snap["txid"],
                                       "sha": snap["sha"]})
@@ -136,23 +184,22 @@ def main() -> int:
         out["decision"], out["code"] = "BLOCK", \
             policy.CODE_BLOCK_RELOCATE_FAILED_STORAGE
         out["reasons"] = [str(exc)]
-        audit.append({"event": "enforce-block", "code": out["code"],
-                      "command": cmd[:500], "reasons": out["reasons"]},
-                     audit_path)
+        record({"event": "enforce-block", "code": out["code"],
+                "command": cmd[:500], "reasons": out["reasons"]})
         return finish(2)
     except Exception as exc:  # compensation failed: refuse to proceed
         out["decision"], out["code"] = "BLOCK", \
             policy.CODE_BLOCK_COMPENSATION_FAILED
         out["reasons"] = [f"compensation error: {exc}"]
-        audit.append({"event": "enforce-error", "command": cmd[:500],
-                      "error": str(exc)}, audit_path)
+        record({"event": "enforce-error", "command": cmd[:500],
+                "code": out["code"], "error": str(exc)})
         return finish(2)
 
     out["compensations"] = compensations
     out["decision"] = "ALLOW"
-    audit.append({"event": "enforce-proceed", "command": cmd[:500],
-                  "compensations": compensations,
-                  "guard_latency_ms": latency_ms}, audit_path)
+    record({"event": "enforce-proceed", "command": cmd[:500],
+            "compensations": compensations,
+            "guard_latency_ms": latency_ms})
     return finish(0)
 
 

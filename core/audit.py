@@ -55,6 +55,8 @@ def append(record: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
     with _APPEND_LOCK:
         with open(audit_path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
     return stored
 
 

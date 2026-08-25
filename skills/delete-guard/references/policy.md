@@ -41,8 +41,9 @@ check.py exit codes: 0 proceed/advisory-ok · 2 blocked · 3 ask · 1 error.
 | 8 | RESTRICTED mode, fs delete | narrow files only -> `RELOCATE_NARROW`, else `BLOCK_RESTRICTED_MODE` | refuse or quarantine |
 | 9 | force/mirror/ref-deletion push | `BLOCK_FORCE_PUSH` | refuse |
 | 10 | `git clean` dry run | `ALLOW_NOOP` | proceed |
-| 11 | `git clean -f...` | `COMPENSATE_CLEAN_ENUMERATE` | enumerate via `clean -n`, relocate matches, proceed |
-| 12 | `git reset --hard`, `git restore <path>`, `git checkout -- <path>` | `COMPENSATE_SNAPSHOT` | `git stash create`+`store` first, proceed |
+| 11 | supported `git clean -f...` | `RELOCATE_VIA_CLEAN_ENUMERATE` | enumerate via `clean -n`, decode every Git-quoted path, relocate every match, proceed only on full coverage |
+| 11a | `git clean -ff`, interactive `-i`, or exclude `-e` | `BLOCK_UNDETERMINABLE_EFFECT` | refuse; nested-repository and interactive/exclusion semantics are not safely mirrored |
+| 12 | `git reset --hard`, `git restore <path>`, `git checkout -- <path>` | `SNAPSHOT_GIT_STASH` | `git stash create`+`store` first; any create/store failure blocks |
 | 13 | all targets git-ignored AND match artifact patterns | `ALLOW_REGENERABLE` | direct delete |
 | 14 | rooted recursive delete | `RELOCATE_TREE` | quarantine whole tree, proceed |
 | 15 | named files/dirs | `RELOCATE_PATHS` | quarantine, proceed |
@@ -55,7 +56,7 @@ Precedence inside rule groups: `outside-workspace` > `workspace-root` >
 - `ALLOW` - run unchanged.
 - `RELOCATE` - move targets to quarantine, then run (the run itself then
   finds nothing - effect preserved, loss reversed).
-- `COMPENSATE` - apply git compensation (snapshot / enumeration), then run.
+- `SNAPSHOT` - durably store a Git snapshot, then run.
 - `BLOCK` - refuse; nothing is executed.
 
 ## Modes
@@ -89,13 +90,17 @@ Default artifact patterns: `node_modules dist build out target __pycache__
 ```
 .agent-trash/
 ├── state.json        # authorization mode (portable fallback)
-├── manifest.jsonl    # tx-start / relocate / snapshot / restore records
-└── audit.jsonl       # every decision: allow, block, compensate
+├── manifest.jsonl    # tx-start / relocate-intent / relocate / snapshot / restore
+└── audit.jsonl       # decisions, compensation intents, and outcomes
 ```
 
-Excluded from git via `.git/info/exclude` (the user's `.gitignore` is never
-modified). Retention/GC is intentionally manual in V1; `restore.py list` and
-`status.py` expose what exists.
+The guard accepts an existing `.gitignore` rule or writes a workspace-local
+`.git/info/exclude` rule (the user's `.gitignore` is never modified).
+Relocations use a durable write-ahead intent; an intent whose move completed
+but whose completion record failed remains discoverable and restorable.
+Retention/GC is intentionally manual in V1; `restore.py list` distinguishes
+`RESTORABLE`, `RESTORED`, `FAILED`, and `PURGED` transaction state, while
+`status.py` reports both historical and currently restorable counts.
 
 ## Retention / GC (B4)
 

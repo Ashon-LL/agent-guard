@@ -14,7 +14,7 @@ compensations (relocate / snapshot); audit.py records everything.
 Guiding principle: uncertainty increases restriction (fail closed).
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 TRASH_DIRNAME = ".agent-trash"
 MANIFEST_NAME = "manifest.jsonl"

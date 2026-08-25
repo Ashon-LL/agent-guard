@@ -12,7 +12,8 @@ export AGENT_GUARD_WORKSPACE="$WORK"
 cd "$WORK"
 
 echo "== 1/5 create a scratch project =="
-git init -q && git config user.email demo@local && git config user.name demo
+git init -q && git config user.email demo@local && git config user.name demo && \
+  git config commit.gpgsign false
 printf 'quarterly numbers\n' > report.txt && git add -A && git commit -qm init
 
 echo "== 2/5 delete it through the guard (safe_delete) =="

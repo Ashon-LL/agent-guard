@@ -58,3 +58,14 @@ jobs:
             --enforce -- 'rm -rf .' && { echo 'guard failed to block'; exit 1; } \
             || test $? -eq 2
           echo 'hard boundary verified'
+
+  dsh-adapter-smoke:
+    name: DSH adapter runtime smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Import and initialize adapter with mocked host services
+        run: node tests/test_dsh_adapter.mjs
