@@ -5,7 +5,8 @@
 [![Node.js 20 smoke](https://img.shields.io/badge/Node.js-20%20smoke-339933?logo=nodedotjs&logoColor=white)](.github/workflows/ci.yml)
 
 [![Codex tested](https://img.shields.io/badge/Codex-gpt--5.6--sol%20medium%20%2B%20high-000000?logo=openai&logoColor=white)](docs/test-report-codex-gpt-5.6-sol.md)
-[![DSH live-tested](https://img.shields.io/badge/DSH-v0.1.0%20live--tested-4D6BFE)](docs/friction.md)
+[![DSH live-tested](https://img.shields.io/badge/DSH-v0.1.1%20DeepSeek%20V4%20Pro%20high%20minimal-4D6BFE)](docs/test-report-dsh-v0.1.1.md)
+[![DSH v0.1.0 history](https://img.shields.io/badge/DSH-v0.1.0%20friction%20log-8B8B8B)](docs/friction.md)
 
 # agent-guard
 
@@ -106,7 +107,7 @@ quarantine full          → BLOCK     (never fall back to permanent delete)
 
 | Harness | Status | Mechanism |
 |---|---|---|
-| **DSH** (DeepSeek Harness) | **published plugin** | `dsh plugin --profile <p> add github:mokuyoaxis/agent-guard` — waterfall interception + tools + prompt section |
+| **DSH** (DeepSeek Harness) | **published plugin**; live-tested at `v0.1.1` (DeepSeek V4 Pro high, minimal mode) | `dsh plugin --profile <p> add github:mokuyoaxis/agent-guard` — waterfall interception + tools + prompt section |
 | **Codex** | reviewed (`gpt-5.6-sol`, high); forward-tested at medium, then medium + high | `delete-guard` skill + CLI under `workspace-write`; preflight supports a pre-ignored `.agent-trash/` when `.git` is read-only |
 | **Claude Code** | ready (`adapters/claude/`) | PreToolUse hook → `permissionDecision` allow/ask/deny |
 | OpenCode / MCP | planned | once conformance has proven out twice |
@@ -136,19 +137,22 @@ compensation engine without restructuring.
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | pillars ↔ components, data flow, design decisions |
 | [docs/threat-model.md](docs/threat-model.md) | honest limits: what this is and is not |
-| [docs/friction.md](docs/friction.md) | what real agents taught us (F1–F9) |
+| [docs/friction.md](docs/friction.md) | what real agents taught us (F1–F11) |
+| [docs/test-report-codex-gpt-5.6-sol.md](docs/test-report-codex-gpt-5.6-sol.md) | v0.1.1 Codex evaluation (medium + high) |
+| [docs/test-report-dsh-v0.1.1.md](docs/test-report-dsh-v0.1.1.md) | v0.1.1 DSH live test (DeepSeek V4 Pro high, minimal mode) |
 | [skills/delete-guard/references/policy.md](skills/delete-guard/references/policy.md) | full rule table and decision codes |
 
 ## Status & roadmap
 
-`v0.1.1` is the reliability-hardening candidate after live DSH `v0.1.0`
+`v0.1.1` is the reliability-hardening release after live DSH `v0.1.0`
 usage, an initial fresh Codex forward test at `gpt-5.6-sol` medium, a high
-reasoning review, and a second paired forward test at medium and high. It adds
+reasoning review, a second paired forward test at medium and high, and a live
+DSH minimal-mode run with DeepSeek V4 Pro `high` reasoning. It adds
 write-ahead relocation intents, Git-quoted path safety, fail-closed Git
 compensation, clean audit preflight under read-only `.git`, explicit
 `RESTORABLE` / `RESTORED` lifecycle state, and a DSH runtime smoke test.
-The patch version is deliberate: this covers two reasoning levels but only one
-model family, so the model/harness validation matrix remains narrow. Next:
+The patch version is deliberate: the model/harness validation matrix still
+covers only two model families across two harnesses. Next:
 additional Codex/Claude/DSH models and reasoning levels,
 Windows dialects (demand-driven), then `database-guard` / `cloud-guard` on
 the same compensation engine.

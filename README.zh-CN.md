@@ -5,7 +5,8 @@
 [![Node.js 20 smoke](https://img.shields.io/badge/Node.js-20%20smoke-339933?logo=nodedotjs&logoColor=white)](.github/workflows/ci.yml)
 
 [![Codex tested](https://img.shields.io/badge/Codex-gpt--5.6--sol%20medium%20%2B%20high-000000?logo=openai&logoColor=white)](docs/test-report-codex-gpt-5.6-sol.md)
-[![DSH live-tested](https://img.shields.io/badge/DSH-v0.1.0%20live--tested-4D6BFE)](docs/friction.md)
+[![DSH live-tested](https://img.shields.io/badge/DSH-v0.1.1%20DeepSeek%20V4%20Pro%20high%20minimal-4D6BFE)](docs/test-report-dsh-v0.1.1.md)
+[![DSH v0.1.0 history](https://img.shields.io/badge/DSH-v0.1.0%20friction%20log-8B8B8B)](docs/friction.md)
 
 # agent-guard
 
@@ -101,7 +102,7 @@ node_modules/(已 ignore) → ALLOW     (可证明可再生)
 
 | Harness | 状态 | 机制 |
 |---|---|---|
-| **DSH**(DeepSeek Harness) | **已发布插件** | `dsh plugin --profile <p> add github:mokuyoaxis/agent-guard`——瀑布拦截 + 工具 + 提示层 |
+| **DSH**(DeepSeek Harness) | **已发布插件**；`v0.1.1` 真机测试(DeepSeek V4 Pro high,极简模式) | `dsh plugin --profile <p> add github:mokuyoaxis/agent-guard`——瀑布拦截 + 工具 + 提示层 |
 | **Codex** | 主审(`gpt-5.6-sol`,high)；先 medium，后 medium + high 前向测试 | `delete-guard` skill + `workspace-write` 下的 CLI；`.git` 只读时支持预先 ignore 的 `.agent-trash/` |
 | **Claude Code** | 就绪(`adapters/claude/`) | PreToolUse hook → `permissionDecision` allow/ask/deny |
 | OpenCode / MCP | 规划中 | 待一致性保证在两个适配器上验证后再扩 |
@@ -129,18 +130,20 @@ Skill 负责 Agent 行为引导,约束全部下沉 Core。未来的 `git-guard`�
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 四柱↔组件映射、数据流、关键设计决定 |
 | [docs/threat-model.md](docs/threat-model.md) | 诚实边界:它是什么、不是什么 |
-| [docs/friction.md](docs/friction.md) | 真实 Agent 撞出来的教训(F1–F9) |
+| [docs/friction.md](docs/friction.md) | 真实 Agent 撞出来的教训(F1–F11) |
+| [docs/test-report-codex-gpt-5.6-sol.md](docs/test-report-codex-gpt-5.6-sol.md) | v0.1.1 Codex 评估(medium + high) |
+| [docs/test-report-dsh-v0.1.1.md](docs/test-report-dsh-v0.1.1.md) | v0.1.1 DSH 真机测试(DeepSeek V4 Pro high,极简模式) |
 | [skills/delete-guard/references/policy.md](skills/delete-guard/references/policy.md) | 完整规则表与判决码 |
 
 ## 状态与路线图
 
 `v0.1.1` 是在 DSH `v0.1.0` 真机使用、首次 `gpt-5.6-sol` medium
-前向测试、high 主审，以及第二轮 medium + high 并行前向测试之后的
-可靠性加固候选版。它加入预写式迁移 intent、Git 转义路径安全、Git 补偿
+前向测试、high 主审、第二轮 medium + high 并行前向测试，以及 DSH
+极简模式下 DeepSeek V4 Pro `high` 真机运行之后的可靠性加固版。
+它加入预写式迁移 intent、Git 转义路径安全、Git 补偿
 fail-closed、只读 `.git` 下不污染工作树的审计预检、明确的
 `RESTORABLE` / `RESTORED` 生命周期状态和 DSH 运行时 smoke test。
-仍使用 patch 版本是有意的:虽然覆盖两个 reasoning
-level，但仍只有一个模型家族，当前多模型、多 harness 验证矩阵还很窄。
+仍使用 patch 版本是有意的:当前验证矩阵只覆盖两个模型家族、两个 harness。
 下一步将扩展 Codex/Claude/DSH 的模型与 reasoning level，
 再按需求支持 Windows 方言，以及同一补偿引擎上的 `database-guard` /
 `cloud-guard`。
