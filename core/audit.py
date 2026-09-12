@@ -10,6 +10,7 @@ from __future__ import annotations
 import getpass
 import json
 import os
+import platform
 import threading
 import time
 import uuid
@@ -40,7 +41,10 @@ def session_id() -> str:
         user = getpass.getuser()
     except Exception:  # pragma: no cover - exotic passwd setups
         user = "unknown"
-    return f"{user}@{os.uname().nodename}:{os.getpid()}"
+    # platform.node() is the cross-platform form of os.uname().nodename
+    # (os.uname does not exist on Windows); empty on exotic setups.
+    host = platform.node() or "localhost"
+    return f"{user}@{host}:{os.getpid()}"
 
 
 def append(record: Dict[str, Any], audit_path: str) -> Dict[str, Any]:

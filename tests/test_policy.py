@@ -240,6 +240,11 @@ class PolicyVerdicts(RepoFixture):
 
     def test_restricted_narrow_file_ok(self):
         path = self.write("notes.txt")
+        # The command is parsed as a POSIX shell would see it: on Windows
+        # fixtures that means forward slashes (an unquoted backslash is an
+        # escape character in the shell, so a backslashed path would name a
+        # different, nonexistent file for both the shell and the classifier).
+        path = path.replace(os.sep, "/")
         v = verdict_for(f"rm {path}", self.root, mode=MODE_RESTRICTED)
         self.assertEqual(v.decision, "RELOCATE")
 
