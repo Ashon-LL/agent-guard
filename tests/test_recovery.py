@@ -50,7 +50,8 @@ class RelocateTests(RepoFixture):
         report = engine.relocate(specs_for(engine, ["link"]))
         trash_link = report["moved"][0]["trash"]
         self.assertTrue(os.path.islink(trash_link))
-        self.assertEqual(os.readlink(trash_link), outside)
+        # Windows readlink may return the extended-length \\?\-prefixed form.
+        self.assertEqual(os.readlink(trash_link).replace("\\\\?\\", ""), outside)
         self.assertTrue(os.path.exists(outside))  # target untouched
 
     def test_restore_roundtrip_and_conflict(self):
@@ -223,6 +224,10 @@ class SnapshotTests(RepoFixture):
         self.assertIn("junk.tmp", paths)
         self.assertNotIn("src/main.py", paths)
 
+    # NTFS forbids \n and other control characters in filenames, so the
+    # git-quoted C-style escape decoding cannot be exercised end-to-end there.
+    @unittest.skipIf(sys.platform == "win32",
+                     "NTFS forbids newline in filenames")
     def test_enumerate_git_clean_decodes_git_quoted_paths(self):
         names = [
             "中文笔记.txt",
