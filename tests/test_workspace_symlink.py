@@ -153,9 +153,8 @@ class SymlinkedWorkspaceFixture(unittest.TestCase):
         engine = RecoveryEngine(self.link)
         restored = engine.restore(txid)
         self.assertTrue(restored["ok"], restored)
-        self.assertEqual(
-            open(os.path.join(self.real, "build", "nested", "a.o")).read(),
-            "artifact")
+        with open(os.path.join(self.real, "build", "nested", "a.o")) as fh:
+            self.assertEqual(fh.read(), "artifact")
 
     # -- boundary facts, independent of the CLI -------------------------
 
