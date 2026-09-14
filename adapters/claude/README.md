@@ -67,6 +67,23 @@ python3 -m unittest tests.test_conformance
 Debug: set `AGENT_GUARD_DEBUG=1` to print the raw core verdict JSON to
 stderr.
 
+## Shell dialect
+
+The hook forwards a shell dialect to `check.py` so Windows-native command
+lines are lexed with the right rules. Precedence:
+
+| Source | Example |
+|---|---|
+| hook payload | `"dialect": "powershell"` (also `shell_dialect`) |
+| environment | `AGENT_GUARD_DIALECT=powershell` |
+| default | `posix` |
+
+The prefilter follows the dialect: the POSIX regex cannot see
+`ri build -r -fo`, so a Windows-native payload would otherwise skip the
+guard entirely. The POSIX prefilter is unchanged, so the default path keeps
+its exact behaviour. An unrecognised dialect selector is **not** swapped
+for POSIX - `check.py` returns `BLOCK_DIALECT_UNKNOWN` and the hook exits 2.
+
 ## Live-tested
 
 Validated end-to-end against a real Claude Code session (2.1.270) with a

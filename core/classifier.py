@@ -51,6 +51,18 @@ DESTRUCTIVE_PREFILTER_RE = re.compile(
     r"|\bfind\b[^\n|;&]*-delete\b"
     r"|\bgit\s+(clean|reset|restore|checkout|push)\b")
 
+# Windows-native prefilter vocabulary. The POSIX regex above never matches
+# `ri build -r -fo`/`rd /s /q build`, so a Windows-native harness would hand
+# the cheap regex a line it cannot see and skip the guard entirely. Adapters
+# only consult this when the *requested* dialect is non-POSIX, so the POSIX
+# fast path keeps its exact historical cost and behaviour.
+DESTRUCTIVE_PREFILTER_RE_WINDOWS = re.compile(
+    r"(^|[\s;&|(\\/])(rm|ri|rd|rmdir|del|erase|remove-item)\b"
+    r"|-\s?(recurse|force|whatif|literalpath)\b"
+    r"|\bgit\s+(clean|reset|restore|checkout|push)\b",
+    re.IGNORECASE)
+
+
 # Rough prefilter for "does this opaque string smell destructive at all".
 # Only used for indirect execution (bash -c '...'), where the guard cannot
 # parse structure and therefore only needs a yes/no smell test.

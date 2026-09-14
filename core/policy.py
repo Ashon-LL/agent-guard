@@ -91,6 +91,8 @@ CODE_BLOCK_PROTECTED_PATH = "BLOCK_PROTECTED_PATH"
 CODE_BLOCK_WILDCARD = "BLOCK_WILDCARD"
 CODE_BLOCK_RESTRICTED_MODE = "BLOCK_RESTRICTED_MODE"
 CODE_BLOCK_FORCE_PUSH = "BLOCK_FORCE_PUSH"
+CODE_BLOCK_DIALECT_UNKNOWN = "BLOCK_DIALECT_UNKNOWN"        # config
+CODE_BLOCK_DIALECT_INVALID = "BLOCK_DIALECT_INVALID"        # config
 CODE_BLOCK_RELOCATE_FAILED_STORAGE = "RELOCATE_FAILED_STORAGE"
 CODE_BLOCK_COMPENSATION_FAILED = "COMPENSATION_FAILED"
 
@@ -139,6 +141,17 @@ EXPLANATIONS: Dict[str, str] = {
                                 "capability.",
     CODE_BLOCK_FORCE_PUSH: "Remote history destruction is never automated "
                            "by the guard. Hard boundary - not askable.",
+    CODE_BLOCK_DIALECT_UNKNOWN: "The requested command dialect is not "
+                                 "recognised, so the command line was never "
+                                 "classified. This is a configuration "
+                                 "problem, not one-off authorization: fix the "
+                                 "dialect selector (posix | cmd | powershell) "
+                                 "and retry.",
+    CODE_BLOCK_DIALECT_INVALID: "The requested command dialect is malformed "
+                                "(expected a single dialect name such as "
+                                "posix, cmd or powershell), so the command "
+                                "line was never classified. Fix the selector "
+                                "and retry.",
     CODE_BLOCK_RELOCATE_FAILED_STORAGE: "Quarantine could not accept the "
                                         "relocation (storage). Refusing to "
                                         "fall back to permanent deletion.",
@@ -430,6 +443,34 @@ def _ask_compound(spec: OpSpec, code: str) -> Verdict:
         reasons=list(spec.notes),
         payload={"op": spec.op, "kind": spec.kind},
     )
+
+
+def decide_dialect_failure(resolution, source: str = "cli") -> Verdict:
+    """A BLOCK verdict for an unusable dialect selector.
+
+    Called *before* classification, because an unusable selector means the
+    command line was never classified at all. The guard must not silently
+    lex a PowerShell line with the POSIX lexer (or vice versa): that is the
+    exact failure the dialect layer exists to prevent, and it would let a
+    destructive line through as an ordinary - or, worse, mis-parsed -
+    delete.
+
+    BLOCK rather than ASK: a bad dialect selector is a configuration defect
+    that recurs on every command, not a one-time authorization a human can
+    meaningfully grant per execution. The explanation names the selector so
+    the fix is mechanical.
+    """
+    if resolution is not None and resolution.ok:
+        raise ValueError("decide_dialect_failure called with a usable dialect")
+    reason = getattr(resolution, "reason", None) or \
+        f"{source}: unusable dialect selector"
+    # The resolver owns the unknown-vs-invalid classification; policy only
+    # mirrors it onto a reason code (single source of truth).
+    kind = getattr(resolution, "kind", None)
+    code = (CODE_BLOCK_DIALECT_INVALID if kind == "invalid"
+            else CODE_BLOCK_DIALECT_UNKNOWN)
+    return Verdict(decision=DECISION_BLOCK, code=code,
+                   reasons=[reason, "command line was not classified"])
 
 
 def decide_op(spec: OpSpec, ctx: PolicyContext) -> Optional[Verdict]:

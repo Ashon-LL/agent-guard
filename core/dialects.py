@@ -49,7 +49,7 @@ import dataclasses
 import os
 import re
 import shlex
-from typing import List, Optional, Sequence, Tuple
+from typing import List, NamedTuple, Optional, Sequence, Tuple
 
 # Kept in sync with classifier.py; importing it here would create a cycle
 # because classifier imports this module.
@@ -497,6 +497,92 @@ _PS_UNSAFE_PARAMS = (
 )
 
 
+# ------------------------------------------------------ parameter names
+#
+# PowerShell resolves a parameter by *unambiguous prefix*: `-Recurse` may
+# be written `-r`, `-rec`, `-recur`... The guard must resolve these too,
+# because `ri build -r -fo` is a recursive forced delete that Phase 1 read
+# as `recursive=False, force=False` - a silently weaker fact than reality.
+#
+# The expansion is deliberately *stricter* than the host:
+#
+#   * Only parameters that the guard already models, or that it must treat
+#     as unsafe, are in the table. Everything else stays unrecognised.
+#   * A prefix is expanded only if it matches exactly ONE entry. The
+#     matches are grouped by *effect*, not by name: if two candidates would
+#     lead the guard to different facts, the prefix is ambiguous and is
+#     left unexpanded, which lands on "unknown parameter" -> BLOCK.
+#     The guard never guesses a flag's meaning.
+#
+# Examples of the fail-closed direction:
+#   -wi   -> WhatIf / WarningAction  (one stops the delete, one does not)
+#   -p    -> Path / PSPath           (both targets, but keep it explicit)
+#   -c    -> Confirm / Credential
+#   -co   -> Confirm / ConfirmPreference-less: still a prompt either way,
+#            so it resolves to Confirm (same effect: uncertain).
+_PS_PREFIX_EFFECTS = {
+    # prefix -> (canonical name, effect group). Same group == safe to merge.
+    "recurse": ("recurse", "recursive"),
+    "force": ("force", "force"),
+    "whatif": ("whatif", "dry-run"),
+    "literalpath": ("literalpath", "unsafe"),
+    "path": ("path", "targets"),
+    "pspath": ("pspath", "targets"),
+    "confirm": ("confirm", "confirm"),
+    "erroraction": ("erroraction", "neutral"),
+    "warningaction": ("warningaction", "unsafe"),
+    "include": ("include", "unsafe"),
+    "exclude": ("exclude", "unsafe"),
+    "filter": ("filter", "unsafe"),
+    "stream": ("stream", "unsafe"),
+    "attributes": ("attributes", "unsafe"),
+    "credential": ("credential", "unsafe"),
+    "verbose": ("verbose", "unsafe"),
+    "debug": ("debug", "unsafe"),
+    "errorvariable": ("errorvariable", "unsafe"),
+    "outvariable": ("outvariable", "unsafe"),
+    "pipelinevariable": ("pipelinevariable", "unsafe"),
+}
+
+# `-lp` is a documented PowerShell prefix of `-LiteralPath` and the only
+# prefix that is *shorter than the first table entry* in a way the generic
+# resolver would call ambiguous, so it is pinned here.
+_PS_PREFIX_PINNED = {"lp": "literalpath"}
+
+
+def resolve_ps_param(name: str) -> Optional[Tuple[str, bool]]:
+    """Resolve a PowerShell parameter name, honouring prefix matching.
+
+    Returns `(canonical_name, was_abbreviated)` when the name resolves
+    unambiguously, else None (the caller must treat it as an unknown
+    parameter and fail closed).
+    """
+    lowered = name.lower()
+
+    pinned = _PS_PREFIX_PINNED.get(lowered)
+    if pinned is not None:
+        return pinned, True
+
+    exact = _PS_PREFIX_EFFECTS.get(lowered)
+    if exact is not None:
+        return lowered, False
+
+    candidates = [(full, group) for full, group in _PS_PREFIX_EFFECTS.items()
+                  if full.startswith(lowered)]
+    if not candidates:
+        return None
+
+    # Collapse by effect group: `-re` only matches `recurse`; a prefix that
+    # matched two *different* effects is ambiguous and never expanded.
+    groups = {group for _, group in candidates}
+    if len(groups) != 1:
+        return None
+    # Same effect, several full names (e.g. none today, but be explicit):
+    # prefer the shortest full name so the audit note is stable.
+    full = min((c for c, _ in candidates), key=len)
+    return full, full != lowered
+
+
 def _ps_param_name(tok: str) -> Optional[Tuple[str, Optional[str]]]:
     """('name', 'value') for a `-Name`/`--Name:value` token, else None."""
     if not tok.startswith("-") or len(tok) < 2:
@@ -577,6 +663,17 @@ def classify_powershell(stream: TokenStream, kind_fs_delete: str,
                 targets.append(tok)
                 continue
             name, value = param
+            resolved = resolve_ps_param(name)
+            if resolved is None:
+                spec.undeterminable = True
+                spec.note(f"unknown parameter -{name}")
+                continue
+            canonical, abbreviated = resolved
+            if abbreviated:
+                # Expansion is auditable: the raw token is what the host
+                # saw, the canonical name is what the guard reasoned about.
+                spec.note(f"parameter -{name} expanded to -{canonical}")
+            name = canonical
             if name == "whatif":
                 flag = _ps_bool_value(value)
                 if flag is None:
@@ -619,13 +716,13 @@ def classify_powershell(stream: TokenStream, kind_fs_delete: str,
                     spec.undeterminable = True
                     spec.note("-Confirm prompts interactively; the executed "
                               "selection is not statically known")
-            elif name in _PS_UNSAFE_PARAMS:
+            else:
+                # Any resolvable name that is not explicitly handled is in
+                # _PS_UNSAFE_PARAMS; reaching here means the table and this
+                # branch disagree, which must fail closed, not fall through.
                 spec.undeterminable = True
                 spec.note(f"-{name.capitalize()} changes the target set; "
                           "not statically resolvable")
-            else:
-                spec.undeterminable = True
-                spec.note(f"unknown parameter -{name}")
 
         if not targets and not spec.dry_run:
             spec.undeterminable = True
@@ -666,6 +763,70 @@ def classify_stream(stream: TokenStream) -> List[object]:
     if stream.dialect == DIALECT_POWERSHELL:
         return classify_powershell_stream(stream)
     return []  # POSIX classification lives in classifier.py
+
+
+class DialectResolution(NamedTuple):
+    """Outcome of resolving an externally supplied dialect selector.
+
+    `dialect` is the effective dialect to lex with; `requested` is what the
+    caller asked for (verbatim, for the audit trail); `ok` is False when the
+    selector was unusable, in which case `reason` explains why and the
+    caller must NOT fall back to POSIX silently - a Windows command line
+    lexed by the POSIX lexer is the failure this layer exists to prevent.
+    """
+
+    dialect: str
+    requested: Optional[str]
+    ok: bool = True
+    reason: Optional[str] = None
+    # "unknown" (name not recognised) or "invalid" (malformed selector);
+    # None when ok. Mirrored onto a policy reason code by the caller, so the
+    # classification lives in exactly one place.
+    kind: Optional[str] = None
+
+
+def resolve_dialect(name: Optional[str],
+                    source: str = "default") -> DialectResolution:
+    """Resolve a dialect selector coming from a CLI flag / harness payload.
+
+    Unlike `normalize_dialect`, this never raises: adapters need a *value*
+    they can act on (and report), not an exception that a harness might
+    swallow into a fail-open. Three outcomes:
+
+      * empty/None            -> DEFAULT_DIALECT, ok (the documented default)
+      * a known name/alias    -> that dialect, ok
+      * anything else         -> ok=False. Malformed values (empty after
+        stripping, embedded separators such as `posix:cmd`, non-string
+        types) are reported as `invalid`; merely unrecognised names as
+        `unknown`. Either way the caller must fail closed.
+    """
+    if name is None or (isinstance(name, str) and not name.strip()):
+        return DialectResolution(DEFAULT_DIALECT, name)
+
+    if not isinstance(name, str):
+        return DialectResolution(DEFAULT_DIALECT, repr(name), ok=False,
+                                 reason=f"{source}: dialect selector is not "
+                                        f"a string ({type(name).__name__})",
+                                 kind="invalid")
+
+    key = name.strip().lower()
+    if not key:
+        return DialectResolution(DEFAULT_DIALECT, name, ok=False,
+                                 reason=f"{source}: dialect selector is empty",
+                                 kind="invalid")
+    if any(ch in key for ch in ":,/;"):
+        return DialectResolution(DEFAULT_DIALECT, name, ok=False,
+                                 reason=f"{source}: dialect selector {name!r} "
+                                        "is malformed (expected a single "
+                                        "dialect name)",
+                                 kind="invalid")
+    if key not in DIALECT_ALIASES:
+        known = ", ".join(sorted(set(DIALECT_ALIASES.values())))
+        return DialectResolution(DEFAULT_DIALECT, name, ok=False,
+                                 reason=f"{source}: unknown dialect {name!r} "
+                                        f"(known: {known})",
+                                 kind="unknown")
+    return DialectResolution(DIALECT_ALIASES[key], name)
 
 
 def normalize_dialect(name: Optional[str]) -> str:

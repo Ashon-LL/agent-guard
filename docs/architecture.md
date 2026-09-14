@@ -89,19 +89,43 @@ classify_command(cmd, dialect="posix")
                     Remove-Item + del/erase/rd/rmdir/rm/ri alias subset
 ```
 
-Three rules keep the layer honest:
+### Dialect selection in production
+
+The dialect is selected by, in precedence order:
+
+1. `--dialect {posix,cmd,powershell}` on `check.py`;
+2. the hook payload / tool arguments (`dialect`, `shell_dialect`);
+3. `AGENT_GUARD_DIALECT`;
+4. `posix` (the default).
+
+Both adapters forward the *requested* selector verbatim rather than a
+resolved value, so `check.py` owns the single verdict for an unusable
+selector. Adapters also pick their cheap prefilter from the dialect: the
+POSIX regex cannot see `ri build -r -fo`, so a Windows session would
+otherwise skip the guard entirely. The POSIX prefilter is untouched, so
+the default path keeps its exact behaviour and cost.
+
+Four rules keep the layer honest:
 
 * **The default dialect is POSIX.** Every existing caller keeps its
   exact behaviour; opting in is explicit.
-* **An unknown dialect name is an error**, never a silent POSIX fallback -
-  lexing a Windows command line with the wrong rules is the failure this
-  layer exists to prevent.
+* **An unknown dialect name is never a silent POSIX fallback.** The
+  library raises/returns unusable; the CLI and adapters turn that into
+  `BLOCK_DIALECT_UNKNOWN` (name not recognised) or
+  `BLOCK_DIALECT_INVALID` (malformed selector). BLOCK, not ASK: a bad
+  selector recurs on every command, so it is a configuration defect rather
+  than a per-execution authorization.
 * **Unresolvable Windows lexemes fail closed.** `%VAR%`, `$var`, `$(...)`,
   piped target sets, `-LiteralPath`, `-Include`/`-Exclude`/`-Filter`,
   interactive `-Confirm`, unknown switches and nested hosts
   (`powershell -Command "..."`) all become undeterminable facts -> BLOCK.
   `-WhatIf:$true` is a dry run (ALLOW); `-WhatIf:$false` is a real delete;
   a *variable* switch value blocks.
+* **Abbreviations expand only when unambiguous.** PowerShell resolves
+  `-r`/`-rec` to `-Recurse` and `-fo` to `-Force`, and the guard follows so
+  a recursive forced delete is not read as a mild one. A prefix matching
+  two different effects (`-wi` -> `-WhatIf` / `-WarningAction`; `-c`, `-p`)
+  is left unexpanded and BLOCKs as an unknown parameter.
 
 Adapters map decisions to native mechanisms - DSH `PreToolDecision`,
 Claude Code PreToolUse `ask`, or, on harnesses without ask support, a deny
