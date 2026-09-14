@@ -147,9 +147,10 @@ fail-closed、只读 `.git` 下不污染工作树的审计预检、明确的
 `RESTORABLE` / `RESTORED` 生命周期状态和 DSH 运行时 smoke test。
 仍使用 patch 版本是有意的:当前验证矩阵只覆盖两个模型家族、两个 harness。
 下一步将扩展 Codex/Claude/DSH 的模型与 reasoning level，
-并推进 Windows 原生 shell 方言(Phase 1 已落地:cmd/PowerShell
-的纯逻辑分词与效果映射在 `core/dialects.py`,POSIX 行为不变;
-Phase 2 需真实 Windows 机器验证),以及同一补偿引擎上的
+并推进 Windows 原生 shell 方言(Phase 1-2 已落地:cmd/PowerShell
+的纯逻辑分词与效果映射在 `core/dialects.py`,PowerShell 无歧义参数前缀展开,
+方言选择已接入 `check.py --dialect`、`AGENT_GUARD_DIALECT` 与两个适配器,
+POSIX 行为与默认路径不变;真实 Windows 端到端验证仍需 Windows 机器),以及同一补偿引擎上的
 `database-guard` / `cloud-guard`。
 
 ## 许可证
