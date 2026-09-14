@@ -6,6 +6,20 @@
 # GIT_CONFIG_GLOBAL=/dev/null keeps host git config (e.g. commit signing)
 # from breaking test fixtures.
 
+# Pure-command NPC dispatch channel: POST /-/build/start with
+# event=api_trigger_npc, env.systemPrompt/userPrompt, npc.workMode=true.
+$:
+  api_trigger_npc:
+    - name: npc-go
+      docker:
+        image: cnbcool/default-npc:latest
+      stages:
+        - name: npc go
+          type: npc:go
+          options:
+            systemPrompt: $systemPrompt
+            userPrompt: $userPrompt
+
 main:
   push:
     - name: unittest-and-hard-boundary (py3.12)
