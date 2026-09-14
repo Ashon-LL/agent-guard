@@ -175,6 +175,23 @@ def _physical(path: str) -> str:
     return os.path.normpath(os.path.realpath(path))
 
 
+def _physical_keep_final(path: str) -> str:
+    """Physical form of a path whose FINAL component must not be resolved.
+
+    `_physical` resolves every symlink, which is right for boundary
+    questions ("does this path live under the workspace?") but wrong for
+    LAYOUT reconstruction: a target that IS a symlink would otherwise be
+    stored under its link target's position, so `restore` could no longer
+    put the link itself back. Resolve the parent chain - that is where the
+    macOS spelling divergence lives - and keep the last name verbatim.
+    """
+    abspath = os.path.normpath(os.path.abspath(path))
+    parent, name = os.path.split(abspath)
+    if not name:  # filesystem root
+        return abspath
+    return os.path.join(os.path.realpath(parent), name)
+
+
 def workspace_boundary_root(workspace: str) -> str:
     """Physical form of a workspace root, for callers that compare roots."""
     return _physical(os.path.normpath(os.path.abspath(workspace)))
