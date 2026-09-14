@@ -33,6 +33,23 @@ the contract:
 
 The tests FAIL against the pre-fix classifier (targets reported
 outside-workspace) and pass after it.
+
+F9b - the OTHER half of the same defect. Normalising the classifier fixed
+the VERDICT but not the LAYOUT: `RecoveryEngine.relocate()` still computed
+`relpath(spec.resolved, self.workspace)` with a LEXICAL origin and a
+PHYSICAL root. Under a symlinked ancestor that produced a multi-segment
+`..` relpath, so the destination escaped `trash_root/<txid>/` entirely -
+on macOS CI it landed in a root-owned directory under
+/private/var/folders/<2char>/ and `os.makedirs` raised PermissionError,
+surfacing as BLOCK_COMPENSATION_FAILED for
+`test_powershell_tree_delete_relocates`. The existing fixture above did not
+catch it because its symlinks sit INSIDE the temp directory: the escape
+still landed somewhere under the quarantine. `SymlinkedAncestorFixture`
+therefore puts the link in the PARENT chain, which is the macOS shape, and
+asserts the destination is inside `trash_root/<txid>/`.
+
+These tests FAIL against the pre-fix relocation (the recorded trash_path is
+`trash/alias/...`, missing the txid level) and pass after it.
 """
 from __future__ import annotations
 
@@ -43,10 +60,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.classifier import classify_command, classify_paths, discover_workspace
+from core import TRASH_DIRNAME
 from core.policy import PolicyContext, decide_ops, worst
 from core.recovery import RecoveryEngine
 
@@ -235,6 +254,217 @@ class SymlinkedWorkspaceFixture(unittest.TestCase):
         self.assertEqual((verdict.decision, verdict.code),
                          ("BLOCK", "BLOCK_OUT_OF_WORKSPACE"))
         self.assertTrue(os.path.exists(os.path.join(outside, "keep.txt")))
+
+
+@unittest.skipUnless(symlink_supported(), "symlinks unavailable on this FS")
+class SymlinkedAncestorFixture(unittest.TestCase):
+    """<tmp>/phys/w is the workspace; <tmp>/alias -> phys is the caller path.
+
+    This is the macOS layout (/var -> /private/var): the SYMLINK is in the
+    ANCESTOR chain of the workspace, so the caller's lexical spelling and
+    the engine's physical workspace differ by more than a trailing segment.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="agent-guard-anc-")
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = os.path.realpath(self._tmp.name)  # canonical tmp
+        self.phys = os.path.join(self.tmp, "phys")
+        self.alias = os.path.join(self.tmp, "alias")
+        self.root = os.path.join(self.phys, "w")
+        os.makedirs(os.path.join(self.root, "build", "nested"))
+        with open(os.path.join(self.root, "build", "nested", "a.o"), "w") as fh:
+            fh.write("artifact")
+        os.symlink(self.phys, self.alias)
+        subprocess.run(["git", "init", "-q", self.root], check=False)
+        # The caller (and the whole guard) speaks the alias spelling.
+        self.spelled_root = os.path.join(self.alias, "w")
+        self.assertTrue(os.path.islink(self.alias))
+        self.assertNotEqual(os.path.realpath(self.spelled_root), self.spelled_root)
+
+    @property
+    def trash_root(self) -> str:
+        # check.py derives it from the PHYSICAL discovered workspace.
+        return os.path.join(os.path.realpath(self.spelled_root), TRASH_DIRNAME)
+
+    def run_check(self, *argv):
+        env = dict(os.environ)
+        env.pop("AGENT_GUARD_DIALECT", None)
+        env.pop("AGENT_GUARD_TRASH", None)
+        env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        proc = subprocess.run(
+            [sys.executable, CHECK, "--cwd", self.spelled_root,
+             "--json", *argv],
+            capture_output=True, text=True, env=env, timeout=60)
+        try:
+            return json.loads(proc.stdout), proc
+        except json.JSONDecodeError:
+            self.fail(f"check.py emitted no JSON: {proc.stdout!r} "
+                      f"{proc.stderr!r}")
+
+    def relocate_records(self, txid):
+        engine = RecoveryEngine(os.path.realpath(self.spelled_root),
+                               self.trash_root)
+        return [r for r in engine.read_manifest()
+                if r.get("type") == "relocate" and r.get("txid") == txid]
+
+    # -- the macOS matrix failure, end to end through the CLI ------------
+
+    def test_relocate_lands_inside_the_transaction_directory(self):
+        """Pre-fix: trash_path was `trash/alias/w/build` - no txid level."""
+        out, proc = self.run_check("--dialect", "powershell", "--enforce",
+                                   "--", "ri build -r -fo")
+        self.assertEqual(
+            (out["decision"], out["code"]), ("ALLOW", "RELOCATE_TREE"),
+            (out.get("reasons"), proc.stderr))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        txid = out["compensations"][0]["txid"]
+        records = self.relocate_records(txid)
+        self.assertEqual(len(records), 1, records)
+        record = records[0]
+        tx_dir = os.path.join(self.trash_root, txid)
+        trash_path = record["trash_path"]
+        self.assertEqual(
+            os.path.commonpath([os.path.realpath(trash_path),
+                                os.path.realpath(tx_dir)]),
+            os.path.realpath(tx_dir),
+            f"quarantine escape: {trash_path} is outside {tx_dir}")
+        self.assertTrue(
+            trash_path.startswith(tx_dir + os.sep),
+            f"missing txid level: {trash_path}")
+        self.assertNotIn(os.pardir, trash_path.split(os.sep),
+                         f"unresolved '..' in quarantine path: {trash_path}")
+        self.assertEqual(os.path.relpath(trash_path, tx_dir),
+                         os.path.join("build"))
+        self.assertTrue(os.path.isdir(trash_path), trash_path)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.root, "build")))
+
+    def test_origin_path_keeps_the_callers_lexical_spelling(self):
+        """Restore and messages must speak the spelling the caller gave us."""
+        out, _ = self.run_check("--dialect", "powershell", "--enforce",
+                                "--", "ri build -r -fo")
+        txid = out["compensations"][0]["txid"]
+        record = self.relocate_records(txid)[0]
+        self.assertEqual(record["origin_path"],
+                         os.path.join(self.spelled_root, "build"))
+        self.assertTrue(record["origin_path"].startswith(self.alias))
+        self.assertNotEqual(os.path.realpath(record["origin_path"]),
+                            record["origin_path"])
+
+    def test_restore_round_trip_through_the_symlinked_ancestor(self):
+        out, _ = self.run_check("--dialect", "powershell", "--enforce",
+                                "--", "ri build -r -fo")
+        txid = out["compensations"][0]["txid"]
+        engine = RecoveryEngine(os.path.realpath(self.spelled_root),
+                               self.trash_root)
+        restored = engine.restore(txid)
+        self.assertTrue(restored["ok"], restored)
+        with open(os.path.join(self.root, "build", "nested", "a.o")) as fh:
+            self.assertEqual(fh.read(), "artifact")
+
+    def test_relocation_never_writes_outside_the_quarantine(self):
+        """Nothing may be created anywhere but inside the quarantine.
+
+        On macOS CI the pre-fix escape created a directory in a parent it
+        had no right to write to (root-owned /private/var/folders/<2char>/),
+        which surfaced as BLOCK COMPENSATION_FAILED.
+        """
+        parent = os.path.dirname(self.root)          # <tmp>/phys
+        grandparent = os.path.dirname(parent)        # <tmp>
+        before = {parent: set(os.listdir(parent)),
+                  grandparent: set(os.listdir(grandparent))}
+        out, proc = self.run_check("--dialect", "powershell", "--enforce",
+                                   "--", "ri build -r -fo")
+        self.assertEqual(
+            (out["decision"], out["code"]), ("ALLOW", "RELOCATE_TREE"),
+            (out.get("reasons"), proc.stderr))
+        for path, entries in before.items():
+            self.assertEqual(set(os.listdir(path)) - entries, set(),
+                             f"stray entries created in {path}")
+        self.assertTrue(os.path.isdir(
+            os.path.join(self.root, TRASH_DIRNAME)))
+        # The whole quarantine lives under this one transaction directory.
+        txid = out["compensations"][0]["txid"]
+        tx_dir = os.path.join(self.root, TRASH_DIRNAME, txid)
+        entries = [os.path.join(tx_dir, e) for e in os.listdir(tx_dir)]
+        self.assertEqual(entries, [os.path.join(tx_dir, "build")])
+
+    # -- the guard itself, independent of the CLI ------------------------
+
+    def test_symlink_target_is_quarantined_at_its_own_location(self):
+        """Physicalising must not follow the FINAL component.
+
+        A target that is itself a symlink is judged by where the LINK lives.
+        A naive realpath on the origin would compute a destination derived
+        from the link's TARGET - outside the workspace - and the containment
+        guard would then (correctly) refuse everything.
+        """
+        outside = os.path.join(self.tmp, "outside-target")
+        with open(outside, "w") as fh:
+            fh.write("far away")
+        link = os.path.join(self.root, "link")
+        os.symlink(outside, link)
+        engine = RecoveryEngine(os.path.realpath(self.spelled_root),
+                                self.trash_root)
+        specs = classify_paths([link], self.spelled_root,
+                               engine.workspace, engine.trash_root)
+        report = engine.relocate(specs, txid="TXLINK")
+        self.assertEqual(report["skipped"], [], report["skipped"])
+        self.assertEqual(len(report["moved"]), 1, report["moved"])
+        trash_link = report["moved"][0]["trash"]
+        self.assertTrue(os.path.islink(trash_link), trash_link)
+        self.assertEqual(os.readlink(trash_link), outside)
+        self.assertTrue(os.path.exists(outside))  # target untouched
+
+    def test_uncontained_destination_is_refused(self):
+        """Defence in depth: layout helpers must not escape trash/<txid>/."""
+        from core.recovery import RecoveryEngine as Engine
+        tx_dir = os.path.join(self.trash_root, "sometxid")
+        inside = Engine._contained_dest(
+            os.path.join(tx_dir, "build", "nested", "a.o"), tx_dir)
+        self.assertTrue(inside.startswith(os.path.realpath(tx_dir)))
+        for bad in (os.path.join(tx_dir, os.pardir, "elsewhere"),
+                    os.path.join(self.phys, "escape"),
+                    tx_dir):
+            with self.assertRaises(OSError, msg=bad):
+                Engine._contained_dest(bad, tx_dir)
+
+    # -- AGENT_GUARD_TRASH: same mixed-spelling risk in the git exclude ---
+
+    def test_exclude_rule_survives_a_lexical_trash_root(self):
+        """relpath(trash_root, workspace) must not mix spellings either.
+
+        AGENT_GUARD_TRASH accepts any spelling, so the engine can hold a
+        PHYSICAL workspace next to a trash_root still spelled through the
+        symlinked alias. Mixed sides yield a `..`-laden pattern such as
+        `/../../alias/w/.agent-trash/`, which Git matches against nothing:
+        the quarantine would then show up as ordinary untracked data. Same
+        defect as the relocation escape, in the git-exclude arithmetic.
+        """
+        alias_trash = os.path.join(self.alias, "w", TRASH_DIRNAME)
+        engine = RecoveryEngine(os.path.realpath(self.spelled_root),
+                                alias_trash)
+        self.assertNotEqual(engine.trash_root, os.path.realpath(alias_trash))
+        engine.ensure_layout()
+        with open(os.path.join(self.spelled_root, ".git", "info",
+                               "exclude")) as fh:
+            exclude = fh.read().replace(os.sep, "/")
+        self.assertIn(f"/{TRASH_DIRNAME}/", exclude)
+        self.assertNotIn(os.pardir * 2, exclude.splitlines()[-1])
+        # The rule must really cover the quarantine location.
+        proc = subprocess.run(
+            ["git", "-C", self.spelled_root, "check-ignore", "-q",
+             "--no-index", "--", f"{TRASH_DIRNAME}/x"],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0,
+                         f"quarantine is not git-ignored: {exclude}")
+        proc = subprocess.run(
+            ["git", "-C", self.spelled_root, "status", "--porcelain",
+             "--untracked-files=all"],
+            capture_output=True, text=True)
+        self.assertEqual(proc.stdout.strip(), "?? build/nested/a.o",
+                         proc.stdout)
 
 
 class UnlinkedWorkspaceFixture(unittest.TestCase):
