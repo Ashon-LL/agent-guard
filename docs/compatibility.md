@@ -30,6 +30,23 @@ While the major version is `0`:
 | check.py CLI flags removed or re-semanticized | major + MIGRATION.md |
 | Default policy verdict changes for an existing shape | minor + entry in docs/friction.md |
 
+## Additive surfaces since v0.1.1
+
+| Surface | Class | Notes |
+|---|---|---|
+| Command dialects (`cmd`, `powershell`) | minor | `classify_command(cmd, dialect=...)`; the default stays `posix`, so pre-existing callers are unaffected |
+| `core/dialects.py` module + `TokenStream` | minor | Internal-but-documented; used by the dialect unit tests |
+| `OpSpec.dialect` field | minor | New field; unknown fields stay opaque to consumers |
+| `Ask` on PowerShell `-WhatIf` | minor | A dry run is an `ALLOW_NOOP`; a real delete keeps existing rules |
+
+Unknown dialect names raise `ValueError` instead of falling back to POSIX.
+That is a deliberate *closed* failure: a silent fallback would lex a
+Windows command line with POSIX rules and could under-restrict it.
+
+Phase 2 (real Windows end-to-end validation) has not happened. The dialect
+layer is additive and opt-in precisely so Windows support can land without
+changing any POSIX verdict.
+
 ## What is explicitly NOT frozen
 
 - Explanation wording (humans read it; improve freely).
