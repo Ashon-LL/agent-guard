@@ -85,7 +85,7 @@ def main() -> int:
 
     try:
         proc = subprocess.run(
-            ["python3", CHECK, "--enforce", "--json", "--", command],
+            [sys.executable, CHECK, "--enforce", "--json", "--", command],
             capture_output=True, text=True, timeout=90, cwd=cwd, env=env,
         )
     except Exception as exc:
