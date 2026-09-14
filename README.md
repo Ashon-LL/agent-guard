@@ -155,7 +155,9 @@ compensation, clean audit preflight under read-only `.git`, explicit
 The patch version is deliberate: the model/harness validation matrix still
 covers only two model families across two harnesses. Next:
 additional Codex/Claude/DSH models and reasoning levels,
-Windows dialects (demand-driven), then `database-guard` / `cloud-guard` on
+Windows shell dialects (Phase 1 landed: pure cmd/PowerShell lexing and
+effect mapping in `core/dialects.py`, POSIX behaviour untouched; Phase 2
+needs a real Windows host), then `database-guard` / `cloud-guard` on
 the same compensation engine.
 
 ## License

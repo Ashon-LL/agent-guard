@@ -453,6 +453,12 @@ def decide_op(spec: OpSpec, ctx: PolicyContext) -> Optional[Verdict]:
     if spec.kind == KIND_FS_DELETE:
         if spec.undeterminable:
             return _block_undeterminable_effect(spec)
+        if spec.dry_run:
+            # A dry run mutates nothing: PowerShell's `-WhatIf` (and only a
+            # literal `$true`, never a variable - that stays undeterminable)
+            # reaches this branch. Nothing to relocate, nothing to refuse.
+            return Verdict(DECISION_ALLOW, CODE_ALLOW_NOOP,
+                           list(spec.notes) or ["dry run: no effect"])
         if not spec.targets:
             return Verdict(DECISION_ALLOW, CODE_ALLOW_NOOP)
         path_specs = classify_paths(

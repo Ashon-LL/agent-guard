@@ -9,10 +9,14 @@ of paths handed to the safe_delete tool) into structured *facts*:
 It deliberately does NOT decide what to do - that is policy.py's job.
 Design rules:
 
-* Classify by effect, not dialect. V1 recognises a concrete vocabulary
+* Classify by effect, dialect only as a front end. The POSIX vocabulary
   (rm/rmdir/unlink/shred, find -delete, git clean/reset/restore/checkout/
-  push) because that vocabulary covers the overwhelming majority of real
-  agent accidents on Linux/macOS.
+  push) covers the overwhelming majority of real agent accidents on
+  Linux/macOS. Native Windows shells express the same effects with other
+  programs and other lexical rules; those live in `dialects.py` and are
+  dispatched by `classify_command(dialect=...)`. The default dialect is
+  POSIX, so the pre-dialect behaviour is unchanged for every existing
+  caller.
 * Fail closed. Unbalanced quotes, shell variables, command substitution,
   unknown flags, stdin-fed target lists, indirect shells (bash -c) - all
   become `undeterminable` facts. The policy layer restricts those.
@@ -28,6 +32,8 @@ import re
 import shlex
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
+
+from . import dialects
 
 # ---------------------------------------------------------------- vocabulary
 
@@ -66,6 +72,10 @@ KIND_UNKNOWN = "unknown"                # destructive smell, no parseable shape
 
 # Whole-command-line shape facts (docs/friction.md F1/F2).
 CREATION_CMDS = {"touch", "mkdir", "cp", "mv", "install", "ln", "tee"}
+# cmd builtins with the same shape (F2 is about "created then destroyed",
+# which `copy x a.tmp && del a.tmp` expresses just as literally).
+CMD_CREATION_CMDS = {"copy", "xcopy", "robocopy", "mkdir", "md", "mklink",
+                     "type", "echo", "ren", "rename", "move"}
 REDIRECT_CREATE_TOKENS = {">", ">>"}
 # Kinds whose compensation depends on enumerating concrete targets; a target
 # created earlier in the same line is invisible to pre-execution compensation.
@@ -85,6 +95,7 @@ class OpSpec:
     dry_run: bool = False
     extra_flags: List[str] = field(default_factory=list)  # scope letters for git clean
     segment_index: int = 0          # position of this op within the command line
+    dialect: str = "posix"          # lexical front end that produced this fact
     wildcard: bool = False       # any target contains glob syntax
     undeterminable: bool = False # effect cannot be determined statically
     shape: Optional[str] = None  # 'F1' | 'F2': compound-command shape facts
@@ -181,6 +192,15 @@ def classify_paths(
             specs.append(spec)
             continue
         spec.wildcard = _has_glob(text)
+        if _is_windows_absolute(text):
+            # NOT host-relative and NOT resolvable here: mapping `C:/x` onto
+            # the POSIX workspace would invent a containment fact. The
+            # dialect layer reports an absolute Windows path as outside the
+            # POSIX workspace boundary - fail closed, never a false ALLOW.
+            spec.resolved = text
+            spec.protected = "outside-workspace"
+            specs.append(spec)
+            continue
         if _has_indeterminacy(text):
             spec.indeterminable = True
             spec.error = "variables/substitution are not allowed in the direct path API"
@@ -245,6 +265,18 @@ def _split_segments(tokens: List[str]) -> List[List[str]]:
 
 def _basename(path: str) -> str:
     return os.path.basename(path)
+
+
+# Windows path shapes, meaningful to the dialect layer on ANY host (a
+# Linux CI run must still reason about `C:/Windows` and `/etc`-style
+# targets arriving in a cmd line).
+_WIN_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+_WIN_UNC_RE = re.compile(r"^(?:\\\\|//)[^/\\]+[/\\][^/\\]+")
+
+
+def _is_windows_absolute(target: str) -> bool:
+    """True for `C:/x`, `C:\\x`, UNC `\\\\server\\share\\x`, `//server/share`."""
+    return bool(_WIN_DRIVE_RE.match(target) or _WIN_UNC_RE.match(target))
 
 
 def _scan_targets(spec: OpSpec) -> None:
@@ -536,22 +568,21 @@ def _apply_shape_rules(specs: List[OpSpec], cd_positions: List[int],
                 "do not exist yet")
 
 
-def classify_command(cmd: str) -> Tuple[List[OpSpec], Optional[str]]:
-    """Parse one shell command line into destructive OpSpecs.
+def _parse_error_spec(exc: str,
+                      dialect: str = dialects.DIALECT_POSIX) -> OpSpec:
+    """One undeterminable UNKNOWN spec for an unparseable command line."""
+    spec = OpSpec(op="<unparseable>", kind=KIND_UNKNOWN, undeterminable=True,
+                  dialect=dialect)
+    spec.note(f"shell parse error: {exc}")
+    return spec
 
-    Heredoc bodies are stripped before parsing (they are written payload,
-    not commands - see docs/friction.md F5).
 
-    Returns (specs, parse_error). Segments that are not destructive are
-    returned as kind=OTHER and ignored by policy. A parse_error (unbalanced
-    quoting) yields one undeterminable UNKNOWN spec - fail closed.
-    """
+def _classify_posix(cmd: str) -> Tuple[List[OpSpec], Optional[str]]:
+    """The historical POSIX/`shlex` pipeline (unchanged behaviour)."""
     try:
         tokens = shlex.split(strip_heredocs(cmd), posix=True)
     except ValueError as exc:
-        fallback = OpSpec(op="<unparseable>", kind=KIND_UNKNOWN, undeterminable=True)
-        fallback.note(f"shell parse error: {exc}")
-        return [fallback], str(exc)
+        return [_parse_error_spec(str(exc))], str(exc)
     if not tokens:
         return [], None
 
@@ -596,5 +627,89 @@ def classify_command(cmd: str) -> Tuple[List[OpSpec], Optional[str]]:
             emit(_parse_git(seg), index)
         # anything else: kind OTHER, intentionally ignored by policy
 
+    for spec in specs:
+        spec.dialect = dialects.DIALECT_POSIX
     _apply_shape_rules(specs, cd_positions, creation_positions)
     return [s for s in specs if s.kind != KIND_OTHER], None
+
+
+def _attribute_targets(spec: OpSpec) -> None:
+    """Per-target facts (wildcard / interpolation) for a dialect op.
+
+    The POSIX path did this inside `_parse_fs_delete`; dialect classifiers
+    only enumerate targets, so the shared attribution lives here. A target
+    like `%BUILD_DIR%/x` or `$env:TEMP` is not a path the guard may
+    resolve, and a target like `*.log` is a set the *tool* expands - both
+    must reach policy as uncertainty, never as a filename.
+    """
+    for target in spec.targets:
+        if _has_glob(target):
+            spec.wildcard = True
+        if dialects.has_interpolation(target):
+            spec.undeterminable = True
+            spec.note(f"target '{target}' contains variable/substitution")
+
+
+def _classify_windows_dialect(cmd: str, dialect: str
+                              ) -> Tuple[List[OpSpec], Optional[str]]:
+    """Native Windows dialects: lex, map effects, then shared annotations.
+
+    Rewriting the path separators before classification is what makes the
+    existing POSIX boundary/glob machinery work unchanged: on Linux a naive
+    `deploy\build` is one filename, so the boundary check would silently
+    treat a Windows tree as a file inside the workspace. Host-native
+    commands keep their separators - the running host already resolves
+    them.
+
+    Shape rules (docs/friction.md F1/F2) apply to Windows lines too: `cd`
+    and the interpreter prefix set are shared shell concepts, so F1 means
+    the same thing in cmd and PowerShell.
+    """
+    stream = dialects.tokenize(cmd, dialect)
+    if not stream.ok:
+        return [_parse_error_spec(stream.error or "parse error", dialect)], \
+            stream.error
+    specs = dialects.classify_stream(stream)
+    cd_positions: List[int] = []
+    creation_positions: List[int] = []
+    for index, segment in enumerate(stream.segments):
+        head = _basename(segment[0]).lower()
+        if head in ("cd", "chdir", "set-location", "sl", "pushd", "popd"):
+            cd_positions.append(index)
+        elif (head.lower() in CREATION_CMDS
+              or head.lower() in CMD_CREATION_CMDS
+              or _has_create_redirect(segment)):
+            creation_positions.append(index)
+    for spec in specs:
+        spec.dialect = dialect
+        if os.name != "nt":
+            # Path separation is a host concern, not a dialect concern:
+            # only rewrite on a non-Windows host, where `\` is an ordinary
+            # filename character and would defeat boundary analysis.
+            spec.targets = [t.replace("\\", "/") for t in spec.targets]
+        _attribute_targets(spec)
+    _apply_shape_rules(specs, cd_positions, creation_positions)
+    return [s for s in specs if s.kind != KIND_OTHER], None
+
+
+def classify_command(cmd: str, dialect: str = dialects.DEFAULT_DIALECT
+                     ) -> Tuple[List[OpSpec], Optional[str]]:
+    """Parse one shell command line into destructive OpSpecs.
+
+    `dialect` selects the lexical front end: `posix` (default, identical to
+    pre-dialect behaviour), `cmd`, or `powershell`. Unknown dialect names
+    raise ValueError rather than silently falling back to POSIX - parsing a
+    Windows command line with the POSIX lexer is the exact failure the
+    dialect layer exists to prevent.
+
+    Heredoc bodies are stripped before POSIX parsing (they are written
+    payload, not commands - see docs/friction.md F5).
+
+    Returns (specs, parse_error). Segments that are not destructive are
+    returned as kind=OTHER and ignored by policy. A parse_error (unbalanced
+    quoting) yields one undeterminable UNKNOWN spec - fail closed.
+    """
+    resolved = dialects.normalize_dialect(dialect)
+    if resolved == dialects.DIALECT_POSIX:
+        return _classify_posix(cmd)
+    return _classify_windows_dialect(cmd, resolved)
