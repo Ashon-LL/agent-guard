@@ -148,11 +148,36 @@ def _has_indeterminacy(text: str) -> bool:
 
 
 def inside_path(path: str, root: str) -> bool:
-    """True when path is root or lies under root (lexical, both absolute)."""
+    """True when path is root or lies under root (both absolute, same form).
+
+    Lexical by design - the caller decides whether the two sides are
+    lexical or physical. Comparing a lexical path against a physical root
+    (or vice versa) is the F9 macOS bug; see `_physical`.
+    """
     try:
         return os.path.commonpath([path, root]) == root
     except ValueError:  # pragma: no cover - mixed abs/rel or exotic roots
         return False
+
+
+def _physical(path: str) -> str:
+    """``realpath``-normalized comparison form of a path (F8/F9).
+
+    Boundary analysis puts BOTH sides through this one function so they can
+    never diverge again: realpath resolves symlinks and ``..`` segments (an
+    unresolved ``/a/link/../b`` does not even mean what its own prefix
+    says), and normpath canonicalizes the result the way the workspace root
+    already was.
+
+    `PathSpec.resolved` deliberately stays lexical for every other use
+    (relocation, restore, messages).
+    """
+    return os.path.normpath(os.path.realpath(path))
+
+
+def workspace_boundary_root(workspace: str) -> str:
+    """Physical form of a workspace root, for callers that compare roots."""
+    return _physical(os.path.normpath(os.path.abspath(workspace)))
 
 
 def discover_workspace(start_dir: str) -> str:
@@ -194,7 +219,7 @@ def classify_paths(
     judged by the location of the link itself, never by its target - deleting
     a link does not touch what it points to.
     """
-    workspace = os.path.normpath(os.path.abspath(workspace))
+    workspace = _physical(os.path.normpath(os.path.abspath(workspace)))
     specs: List[PathSpec] = []
     for raw in raw_paths:
         spec = PathSpec(raw=raw)
@@ -233,15 +258,33 @@ def classify_paths(
             spec.is_dir = True
         elif os.path.isfile(absolute):
             spec.is_file = True
-        spec.inside_workspace = inside_path(absolute, workspace)
+        # Boundary facts are resolved PHYSICALLY on BOTH sides (F9): the
+        # target is physicalized for the containment comparison only, while
+        # `spec.resolved` keeps the caller's LEXICAL path - compensation
+        # budget and error messages depend on the path the caller gave us.
+        # Normalizing one side alone is the macOS bug: a fixture that runs
+        # under a symlinked directory (/tmp -> /private/tmp, /var/folders
+        # -> /private/var/folders) lexically shares no prefix with the
+        # physicalized workspace root, so every in-workspace target was
+        # reported BLOCK_OUT_OF_WORKSPACE. Symbolic links the target *ends*
+        # at are physicalized too, exactly as the workspace root already was
+        # (F8): the old comparison was asymmetrically physical anyway.
+        physical = _physical(absolute)
+        spec.inside_workspace = inside_path(physical, workspace)
+        trash_physical = None
         if trash_root:
-            spec.inside_trash = inside_path(absolute, os.path.normpath(trash_root))
-        if absolute == workspace:
+            trash_physical = _physical(os.path.normpath(trash_root))
+            spec.inside_trash = inside_path(physical, trash_physical)
+        if physical == workspace or physical == trash_physical:
+            # Anchored at a boundary root itself: a workspace root and the
+            # quarantine centre are both "the root of their tree", never
+            # content. `rm -rf .` stays a hard BLOCK. (When no trash_root is
+            # given, trash_physical is None and cannot match a real path.)
             spec.protected = "workspace-root"
         elif not spec.inside_workspace:
             spec.protected = "outside-workspace"
         else:
-            rel = os.path.relpath(absolute, workspace)
+            rel = os.path.relpath(physical, workspace)
             if any(part == ".git" for part in rel.split(os.sep)):
                 spec.protected = "git-metadata"
         specs.append(spec)
