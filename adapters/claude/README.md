@@ -18,6 +18,11 @@ Decision Protocol onto Claude Code's native hook semantics.
 Note the deliberate asymmetry: allow/ask reasons are user-facing, while
 BLOCK uses the stderr channel so the *model* learns the remediation.
 
+In a headless run (`claude -p`) with no interactive approver, an ASK that
+nobody approves is a **denial** and the command does not run. That is the
+fail-safe outcome, but wire up an approver if you need ASK to be an actual
+prompt.
+
 ## Install
 
 1. Copy or reference this repository from a stable path.
@@ -61,3 +66,16 @@ python3 -m unittest tests.test_conformance
 
 Debug: set `AGENT_GUARD_DEBUG=1` to print the raw core verdict JSON to
 stderr.
+
+## Live-tested
+
+Validated end-to-end against a real Claude Code session (2.1.270) with a
+scripted mock Anthropic endpoint standing in for the model, plus the
+`python3`-free regression tests. See
+[`docs/test-report-claude-code-harness.md`](../../docs/test-report-claude-code-harness.md)
+and the shipped harness in [`harness/`](harness/README.md).
+
+The guard child is spawned with `sys.executable`, never `python3` from
+`PATH`: on a host with only `python`, a hardcoded `python3` made every
+interception fail closed and the guard silently unusable. See the report's
+A/B evidence.
