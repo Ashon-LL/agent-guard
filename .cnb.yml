@@ -12,8 +12,13 @@ main:
       docker:
         image: python:3.12
       stages:
-        - name: unittest suite
-          script: GIT_CONFIG_GLOBAL=/dev/null python -m unittest discover tests -v
+        # CNB docker stages run as root; the suite's read-only (chmod-based)
+        # fail-closed tests need an unprivileged user to be meaningful.
+        - name: unittest suite (as non-root user)
+          script: |
+            useradd -m ci
+            chmod -R a+rX /workspace
+            su ci -c 'cd /workspace && GIT_CONFIG_GLOBAL=/dev/null python -m unittest discover tests -v'
         - name: integration smoke - hard boundary holds end-to-end
           script: |
             set -e
@@ -42,8 +47,13 @@ main:
       docker:
         image: python:3.12
       stages:
-        - name: unittest suite
-          script: GIT_CONFIG_GLOBAL=/dev/null python -m unittest discover tests -v
+        # CNB docker stages run as root; the suite's read-only (chmod-based)
+        # fail-closed tests need an unprivileged user to be meaningful.
+        - name: unittest suite (as non-root user)
+          script: |
+            useradd -m ci
+            chmod -R a+rX /workspace
+            su ci -c 'cd /workspace && GIT_CONFIG_GLOBAL=/dev/null python -m unittest discover tests -v'
         - name: integration smoke - hard boundary holds end-to-end
           script: |
             set -e
